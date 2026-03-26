@@ -57,8 +57,15 @@ export async function loadStageData(stageId: string): Promise<StageStoreData | n
     const res = await fetch(`/api/shared/stages/${encodeURIComponent(stageId)}`);
     if (!res.ok) return null;
 
-    const json = (await res.json()) as { success: boolean; data?: StageStoreData };
-    return json.data ?? null;
+    const json = (await res.json()) as {
+      success: boolean;
+      data?: StageStoreData | { data?: StageStoreData };
+    };
+    const payload = json.data;
+    if (!payload) return null;
+    if ('stage' in payload) return payload as StageStoreData;
+    if ('data' in payload) return payload.data ?? null;
+    return null;
   } catch (error) {
     log.error('Failed to load shared stage:', error);
     return null;

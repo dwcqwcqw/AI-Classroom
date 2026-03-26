@@ -77,6 +77,11 @@ export async function persistClassroom(
   },
   baseUrl: string,
 ): Promise<PersistedClassroomData & { url: string }> {
+  console.log('[persistClassroom] begin', {
+    id: data.id,
+    stageId: data.stage?.id,
+    scenesCount: data.scenes?.length ?? 0,
+  });
   const classroomData: PersistedClassroomData = {
     id: data.id,
     stage: data.stage,
@@ -89,6 +94,10 @@ export async function persistClassroom(
     scenes: data.scenes,
     chats: [],
     currentSceneId: data.scenes[0]?.id || null,
+  });
+  console.log('[persistClassroom] saved shared stage', {
+    id: data.id,
+    scenesCount: data.scenes?.length ?? 0,
   });
 
   await ensureClassroomsDir();
