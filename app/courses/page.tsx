@@ -49,7 +49,6 @@ function CourseCard({ stage, slide }: { stage: StageListItem; slide?: Slide }) {
             size={thumbWidth}
             viewportSize={slide.viewportSize ?? 1000}
             viewportRatio={slide.viewportRatio ?? 0.5625}
-            disableClick
           />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">

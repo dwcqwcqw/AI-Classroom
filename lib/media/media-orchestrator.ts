@@ -126,9 +126,9 @@ async function generateSingleMedia(
   store.markGenerating(req.elementId);
 
   try {
-    let resultUrl: string;
+    let resultUrl: string | undefined;
     let posterUrl: string | undefined;
-    let mimeType: string;
+    let mimeType: string | undefined;
 
     if (req.type === 'image') {
       // Retry on provider-side rate limiting (429 / Throttling.RateQuota)
@@ -166,6 +166,9 @@ async function generateSingleMedia(
     }
 
     if (abortSignal?.aborted) return;
+    if (!resultUrl || !mimeType) {
+      throw new Error('MEDIA_GENERATION_RESULT_MISSING');
+    }
 
     // Fetch blob from URL
     const blob = await fetchAsBlob(resultUrl);
