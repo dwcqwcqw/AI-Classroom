@@ -27,6 +27,22 @@ import { createLogger } from '@/lib/logger';
 
 const log = createLogger('ExportPPTX');
 
+async function uploadSharedFile(file: File, stageId?: string, kind?: string) {
+  const form = new FormData();
+  form.append('file', file);
+  if (stageId) form.append('stageId', stageId);
+  if (kind) form.append('kind', kind);
+
+  const res = await fetch('/api/shared/files', {
+    method: 'POST',
+    body: form,
+  });
+
+  if (!res.ok) {
+    throw new Error(`UPLOAD_SHARED_FILE_FAILED_${res.status}`);
+  }
+}
+
 const DEFAULT_FONT_SIZE = 16;
 const DEFAULT_FONT_FAMILY = 'Microsoft YaHei';
 
@@ -1115,7 +1131,19 @@ export function useExportPPTX() {
         ratioPx2Inch,
         ratioPx2Pt,
       );
-      saveAs(blob, `${fileName}.pptx`);
+
+      const pptFileName = `${fileName}.pptx`;
+      saveAs(blob, pptFileName);
+
+      try {
+        const file = new File([blob], pptFileName, {
+          type: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        });
+        await uploadSharedFile(file, stage?.id, 'ppt');
+      } catch (error) {
+        log.warn('Failed to upload PPT to shared storage:', error);
+      }
+
       toast.success(t('export.exportSuccess'));
     });
   }, [
@@ -1161,7 +1189,16 @@ export function useExportPPTX() {
 
       // 3. Download ZIP
       const zipBlob = await zip.generateAsync({ type: 'blob' });
-      saveAs(zipBlob, `${fileName}.zip`);
+      const zipFileName = `${fileName}.zip`;
+      saveAs(zipBlob, zipFileName);
+
+      try {
+        const file = new File([zipBlob], zipFileName, { type: 'application/zip' });
+        await uploadSharedFile(file, stage?.id, 'other');
+      } catch (error) {
+        log.warn('Failed to upload ZIP to shared storage:', error);
+      }
+
       toast.success(t('export.exportSuccess'));
     });
   }, [
