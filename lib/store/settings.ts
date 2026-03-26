@@ -19,6 +19,22 @@ import { createLogger } from '@/lib/logger';
 
 const log = createLogger('Settings');
 
+const SHARED_SETTINGS_EXCLUDE_KEYS = new Set([
+  'fetchServerProviders',
+  'loadSharedSettings',
+  'saveSharedSettings',
+]);
+
+function extractSerializableSettings(state: SettingsState): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(state)) {
+    if (typeof v === 'function') continue;
+    if (SHARED_SETTINGS_EXCLUDE_KEYS.has(k)) continue;
+    out[k] = v;
+  }
+  return out;
+}
+
 /** Available playback speed tiers */
 export const PLAYBACK_SPEEDS = [1, 1.5, 2] as const;
 export type PlaybackSpeed = (typeof PLAYBACK_SPEEDS)[number];
@@ -230,6 +246,10 @@ export interface SettingsState {
 
   // Server provider actions
   fetchServerProviders: () => Promise<void>;
+
+  // Shared cloud settings (global, no user isolation)
+  loadSharedSettings: () => Promise<void>;
+  saveSharedSettings: () => Promise<void>;
 }
 
 // Initialize default providers config
@@ -421,7 +441,7 @@ const migrateFromOldStorage = () => {
 
 export const useSettingsStore = create<SettingsState>()(
   persist(
-    (set) => {
+    (set, get) => {
       // Try to migrate from old storage
       const migratedData = migrateFromOldStorage();
       const defaultAudioConfig = getDefaultAudioConfig();
@@ -636,7 +656,6 @@ export const useSettingsStore = create<SettingsState>()(
             set((state) => {
               // Merge LLM providers
               const newProvidersConfig = { ...state.providersConfig };
-              // First reset all server flags
               for (const pid of Object.keys(newProvidersConfig)) {
                 const key = pid as ProviderId;
                 if (newProvidersConfig[key]) {
@@ -648,12 +667,10 @@ export const useSettingsStore = create<SettingsState>()(
                   };
                 }
               }
-              // Set flags for server-configured providers
               for (const [pid, info] of Object.entries(data.providers)) {
                 const key = pid as ProviderId;
                 if (newProvidersConfig[key]) {
                   const currentModels = newProvidersConfig[key].models;
-                  // When server specifies allowed models, filter the models list
                   const filteredModels = info.models?.length
                     ? currentModels.filter((m) => info.models!.includes(m.id))
                     : currentModels;
@@ -667,7 +684,6 @@ export const useSettingsStore = create<SettingsState>()(
                 }
               }
 
-              // Merge TTS providers
               const newTTSConfig = { ...state.ttsProvidersConfig };
               for (const pid of Object.keys(newTTSConfig)) {
                 const key = pid as TTSProviderId;
@@ -690,7 +706,6 @@ export const useSettingsStore = create<SettingsState>()(
                 }
               }
 
-              // Merge ASR providers
               const newASRConfig = { ...state.asrProvidersConfig };
               for (const pid of Object.keys(newASRConfig)) {
                 const key = pid as ASRProviderId;
@@ -713,7 +728,6 @@ export const useSettingsStore = create<SettingsState>()(
                 }
               }
 
-              // Merge PDF providers
               const newPDFConfig = { ...state.pdfProvidersConfig };
               for (const pid of Object.keys(newPDFConfig)) {
                 const key = pid as PDFProviderId;
@@ -736,7 +750,6 @@ export const useSettingsStore = create<SettingsState>()(
                 }
               }
 
-              // Merge Image providers
               const newImageConfig = { ...state.imageProvidersConfig };
               for (const pid of Object.keys(newImageConfig)) {
                 const key = pid as ImageProviderId;
@@ -759,7 +772,6 @@ export const useSettingsStore = create<SettingsState>()(
                 }
               }
 
-              // Merge Video providers
               const newVideoConfig = { ...state.videoProvidersConfig };
               for (const pid of Object.keys(newVideoConfig)) {
                 const key = pid as VideoProviderId;
@@ -784,7 +796,6 @@ export const useSettingsStore = create<SettingsState>()(
                 }
               }
 
-              // Merge Web Search config — reset all first, then mark server-configured
               const newWebSearchConfig = { ...state.webSearchProvidersConfig };
               for (const key of Object.keys(newWebSearchConfig) as WebSearchProviderId[]) {
                 newWebSearchConfig[key] = {
@@ -806,7 +817,6 @@ export const useSettingsStore = create<SettingsState>()(
                 }
               }
 
-              // === Auto-select / auto-enable (only on first run) ===
               let autoTtsProvider: TTSProviderId | undefined;
               let autoTtsVoice: string | undefined;
               let autoAsrProvider: ASRProviderId | undefined;
@@ -819,12 +829,10 @@ export const useSettingsStore = create<SettingsState>()(
               let autoVideoEnabled: boolean | undefined;
 
               if (!state.autoConfigApplied) {
-                // PDF: unpdf → mineru if server has it
                 if (newPDFConfig.mineru?.isServerConfigured && state.pdfProviderId === 'unpdf') {
                   autoPdfProvider = 'mineru' as PDFProviderId;
                 }
 
-                // TTS: select first server provider if current is not server-configured
                 const serverTtsIds = Object.keys(data.tts) as TTSProviderId[];
                 if (
                   serverTtsIds.length > 0 &&
@@ -834,7 +842,6 @@ export const useSettingsStore = create<SettingsState>()(
                   autoTtsVoice = DEFAULT_TTS_VOICES[autoTtsProvider] || 'default';
                 }
 
-                // ASR: select first server provider if current is not server-configured
                 const serverAsrIds = Object.keys(data.asr) as ASRProviderId[];
                 if (
                   serverAsrIds.length > 0 &&
@@ -843,7 +850,6 @@ export const useSettingsStore = create<SettingsState>()(
                   autoAsrProvider = serverAsrIds[0];
                 }
 
-                // Image: first server provider
                 const serverImageIds = Object.keys(data.image) as ImageProviderId[];
                 if (
                   serverImageIds.length > 0 &&
@@ -857,7 +863,6 @@ export const useSettingsStore = create<SettingsState>()(
                   autoImageEnabled = true;
                 }
 
-                // Video: first server provider
                 const serverVideoIds = Object.keys(data.video || {}) as VideoProviderId[];
                 if (
                   serverVideoIds.length > 0 &&
@@ -872,8 +877,6 @@ export const useSettingsStore = create<SettingsState>()(
                 }
               }
 
-              // Always re-select TTS if the current provider has no key at all
-              // (catches cases where a previously configured provider's key was removed)
               if (!autoTtsProvider && state.ttsProviderId !== 'browser-native-tts') {
                 const serverTtsIds = Object.keys(data.tts) as TTSProviderId[];
                 const currentTTSCfg = newTTSConfig[state.ttsProviderId];
@@ -885,13 +888,11 @@ export const useSettingsStore = create<SettingsState>()(
                 }
               }
 
-              // LLM auto-select: when modelId is empty
               let autoProviderId: ProviderId | undefined;
               let autoModelId: string | undefined;
               if (!state.modelId) {
                 for (const [pid, cfg] of Object.entries(newProvidersConfig)) {
                   if (cfg.isServerConfigured) {
-                    // Prefer server-restricted models, fall back to built-in list
                     const serverModels = cfg.serverModels;
                     const modelId = serverModels?.length
                       ? serverModels[0]
@@ -939,8 +940,36 @@ export const useSettingsStore = create<SettingsState>()(
               };
             });
           } catch (e) {
-            // Silently fail — server providers are optional
             log.warn('Failed to fetch server providers:', e);
+          }
+        },
+
+        loadSharedSettings: async () => {
+          try {
+            const res = await fetch('/api/shared/settings');
+            if (!res.ok) return;
+            const payload = (await res.json()) as {
+              success: boolean;
+              settings?: Partial<SettingsState>;
+            };
+            const settings = payload.settings;
+            if (!settings || typeof settings !== 'object') return;
+            set((state) => ({ ...state, ...settings }));
+          } catch (e) {
+            log.warn('Failed to load shared settings:', e);
+          }
+        },
+
+        saveSharedSettings: async () => {
+          try {
+            const snapshot = extractSerializableSettings(get());
+            await fetch('/api/shared/settings', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ settings: snapshot }),
+            });
+          } catch (e) {
+            log.warn('Failed to save shared settings:', e);
           }
         },
       };
