@@ -1,3 +1,5 @@
+import { getCloudflareContext } from '@opennextjs/cloudflare';
+
 type D1Statement = {
   bind: (...values: unknown[]) => D1Statement;
   first: <T = Record<string, unknown>>() => Promise<T | null>;
@@ -10,6 +12,14 @@ type D1DatabaseLike = {
 };
 
 export function getD1(): D1DatabaseLike | null {
+  try {
+    const cf = getCloudflareContext({ async: false });
+    const db = (cf.env as { DB?: D1DatabaseLike }).DB;
+    if (db) return db;
+  } catch {
+    // Not in Cloudflare runtime
+  }
+
   const db = (globalThis as { DB?: D1DatabaseLike }).DB;
   return db ?? null;
 }

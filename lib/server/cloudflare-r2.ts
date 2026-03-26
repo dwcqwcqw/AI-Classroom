@@ -1,3 +1,5 @@
+import { getCloudflareContext } from '@opennextjs/cloudflare';
+
 type R2ObjectBody = {
   text: () => Promise<string>;
   arrayBuffer: () => Promise<ArrayBuffer>;
@@ -25,5 +27,13 @@ type R2BucketLike = {
 };
 
 export function getR2(): R2BucketLike | null {
+  try {
+    const cf = getCloudflareContext({ async: false });
+    const r2 = (cf.env as { FILES?: R2BucketLike }).FILES;
+    if (r2) return r2;
+  } catch {
+    // Not in Cloudflare runtime
+  }
+
   return (globalThis as { FILES?: R2BucketLike }).FILES ?? null;
 }
