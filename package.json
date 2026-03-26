@@ -10,9 +10,9 @@
     "postinstall": "cd packages/mathml2omml && npm run build && cd ../pptxgenjs && npm run build",
     "dev": "next dev",
     "build": "next build",
-    "build:cf": "pnpm dlx @opennextjs/cloudflare build --openNextConfigPath ./open-next.config.ts",
-    "preview:cf": "pnpm run build:cf && pnpm dlx wrangler dev",
-    "deploy:cf": "pnpm run build:cf && pnpm dlx @opennextjs/cloudflare deploy",
+    "build:cf": "pnpm exec opennextjs-cloudflare build --openNextConfigPath ./open-next.config.ts",
+    "preview:cf": "pnpm run build:cf && pnpm exec wrangler dev",
+    "deploy:cf": "pnpm run build:cf && pnpm exec opennextjs-cloudflare deploy",
     "start": "next start",
     "lint": "eslint",
     "check": "prettier . --check",
@@ -81,7 +81,6 @@
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "shadcn": "^3.6.3",
-    "sharp": "^0.34.5",
     "shiki": "^3.21.0",
     "sonner": "^2.0.7",
     "streamdown": "^2.1.0",
@@ -122,6 +121,9 @@
     "wrangler": "^4.77.0"
   },
   "pnpm": {
+    "onlyBuiltDependencies": [
+      "sharp"
+    ],
     "ignoredBuiltDependencies": [
       "unrs-resolver"
     ]

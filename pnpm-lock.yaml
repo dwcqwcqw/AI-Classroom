@@ -194,9 +194,6 @@ importers:
       shadcn:
         specifier: ^3.6.3
         version: 3.8.5(@cfworker/json-schema@4.1.1)(@types/node@20.19.37)(typescript@5.9.3)
-      sharp:
-        specifier: ^0.34.5
-        version: 0.34.5
       shiki:
         specifier: ^3.21.0
         version: 3.23.0

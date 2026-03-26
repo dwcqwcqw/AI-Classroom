@@ -137,8 +137,7 @@
  * - Always include provider name in error messages
  */
 
-import { extractText, getDocumentProxy, extractImages } from 'unpdf';
-import sharp from 'sharp';
+import { extractText, getDocumentProxy } from 'unpdf';
 import type { PDFParserConfig } from './types';
 import type { ParsedPdfContent } from '@/lib/types/pdf';
 import { PDF_PROVIDERS } from './constants';
@@ -201,7 +200,8 @@ async function parseWithUnpdf(pdfBuffer: Buffer): Promise<ParsedPdfContent> {
     mergePages: true,
   });
 
-  // Extract images using the same document proxy
+  // Disable server-side PDF image extraction in Cloudflare/Worker builds.
+  // This avoids native sharp dependency and keeps text parsing stable.
   const images: string[] = [];
   const pdfImagesMeta: Array<{
     id: string;
@@ -210,45 +210,6 @@ async function parseWithUnpdf(pdfBuffer: Buffer): Promise<ParsedPdfContent> {
     width: number;
     height: number;
   }> = [];
-  let imageCounter = 0;
-
-  for (let pageNum = 1; pageNum <= numPages; pageNum++) {
-    try {
-      const pageImages = await extractImages(pdf, pageNum);
-      for (let i = 0; i < pageImages.length; i++) {
-        const imgData = pageImages[i];
-        try {
-          // Use sharp to convert raw image data to PNG base64
-          const pngBuffer = await sharp(Buffer.from(imgData.data), {
-            raw: {
-              width: imgData.width,
-              height: imgData.height,
-              channels: imgData.channels,
-            },
-          })
-            .png()
-            .toBuffer();
-
-          // Convert to base64
-          const base64 = `data:image/png;base64,${pngBuffer.toString('base64')}`;
-          imageCounter++;
-          const imgId = `img_${imageCounter}`;
-          images.push(base64);
-          pdfImagesMeta.push({
-            id: imgId,
-            src: base64,
-            pageNumber: pageNum,
-            width: imgData.width,
-            height: imgData.height,
-          });
-        } catch (sharpError) {
-          log.error(`Failed to convert image ${i + 1} from page ${pageNum}:`, sharpError);
-        }
-      }
-    } catch (pageError) {
-      log.error(`Failed to extract images from page ${pageNum}:`, pageError);
-    }
-  }
 
   return {
     text: pdfText,

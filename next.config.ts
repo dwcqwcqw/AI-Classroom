@@ -8,7 +8,6 @@ const isCloudflare =
 const nextConfig: NextConfig = {
   output: process.env.VERCEL || isCloudflare ? undefined : 'standalone',
   transpilePackages: ['mathml2omml', 'pptxgenjs'],
-  serverExternalPackages: ['sharp'],
   images: {
     unoptimized: true,
   },
