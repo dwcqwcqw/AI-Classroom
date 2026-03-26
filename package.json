@@ -10,8 +10,9 @@
     "postinstall": "cd packages/mathml2omml && npm run build && cd ../pptxgenjs && npm run build",
     "dev": "next dev",
     "build": "next build",
-    "build:cf": "pnpm build",
-    "preview:cf": "pnpm build && pnpm start",
+    "build:cf": "pnpm dlx @opennextjs/cloudflare build --openNextConfigPath ./open-next.config.ts",
+    "preview:cf": "pnpm run build:cf && pnpm dlx wrangler dev",
+    "deploy:cf": "pnpm run build:cf && pnpm dlx @opennextjs/cloudflare deploy",
     "start": "next start",
     "lint": "eslint",
     "check": "prettier . --check",
@@ -59,7 +60,7 @@
     "mitt": "^3.0.1",
     "motion": "^12.27.5",
     "nanoid": "^5.1.6",
-    "next": "16.1.2",
+    "next": "16.1.5",
     "next-themes": "^0.4.6",
     "openai": "^4.104.0",
     "partial-json": "^0.1.7",
@@ -98,6 +99,7 @@
     "zustand": "^5.0.10"
   },
   "devDependencies": {
+    "@opennextjs/cloudflare": "^1.17.3",
     "@rollup/plugin-commonjs": "^28.0.1",
     "@rollup/plugin-node-resolve": "^16.0.1",
     "@tailwindcss/postcss": "^4",
@@ -116,11 +118,11 @@
     "tailwindcss": "^4",
     "tslib": "^2.8.0",
     "typescript": "^5",
-    "vue-to-react": "^1.0.0"
+    "vue-to-react": "^1.0.0",
+    "wrangler": "^4.77.0"
   },
   "pnpm": {
     "ignoredBuiltDependencies": [
-      "sharp",
       "unrs-resolver"
     ]
   },

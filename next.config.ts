@@ -8,7 +8,10 @@ const isCloudflare =
 const nextConfig: NextConfig = {
   output: process.env.VERCEL || isCloudflare ? undefined : 'standalone',
   transpilePackages: ['mathml2omml', 'pptxgenjs'],
-  serverExternalPackages: [],
+  serverExternalPackages: ['sharp'],
+  images: {
+    unoptimized: true,
+  },
   experimental: {
     proxyClientMaxBodySize: '200mb',
   },
