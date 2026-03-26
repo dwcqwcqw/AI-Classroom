@@ -18,6 +18,64 @@ const log = createLogger('PromptLoader');
 const promptCache = new Map<string, LoadedPrompt>();
 const snippetCache = new Map<string, string>();
 
+const FALLBACK_SNIPPETS: Record<string, string> = {
+  'json-output-rules': 'Return valid JSON only. Do not wrap with markdown code fences.',
+  'action-types': 'Use action types: speech, highlight, point, click, showResult, wait, animation, interaction.',
+  'element-types': 'Use slide element types: text, image, shape, chart, table, line, latex, video, audio.',
+};
+
+const FALLBACK_PROMPTS: Record<string, LoadedPrompt> = {
+  'requirements-to-outlines': {
+    id: 'requirements-to-outlines',
+    systemPrompt:
+      'You are an expert instructional designer. Create structured scene outlines as strict JSON array.',
+    userPromptTemplate:
+      'Requirement: {{requirement}}\nLanguage: {{language}}\nPDF: {{pdfContent}}\nImages: {{availableImages}}\nReturn 5-8 scene outlines with fields: id,title,type,description,script,order,language,mediaGenerations.',
+  },
+  'slide-content': {
+    id: 'slide-content',
+    systemPrompt: 'Generate slide canvas JSON content. Return strict JSON only.',
+    userPromptTemplate:
+      'Outline title: {{title}}\nDescription: {{description}}\nLanguage: {{language}}\nCreate slide content with a balanced layout and clear pedagogy.',
+  },
+  'quiz-content': {
+    id: 'quiz-content',
+    systemPrompt: 'Generate quiz JSON with questions and options. Return strict JSON only.',
+    userPromptTemplate:
+      'Outline title: {{title}}\nDescription: {{description}}\nLanguage: {{language}}\nCreate a concise formative quiz.',
+  },
+  'slide-actions': {
+    id: 'slide-actions',
+    systemPrompt: 'Generate presentation actions for slide playback. Return strict JSON array.',
+    userPromptTemplate: 'Scene script: {{script}}\nContent summary: {{contentSummary}}',
+  },
+  'quiz-actions': {
+    id: 'quiz-actions',
+    systemPrompt: 'Generate quiz interaction actions. Return strict JSON array.',
+    userPromptTemplate: 'Quiz content: {{contentSummary}}\nScene script: {{script}}',
+  },
+  'interactive-scientific-model': {
+    id: 'interactive-scientific-model',
+    systemPrompt: 'Design a scientific interactive model spec in JSON.',
+    userPromptTemplate: 'Topic: {{title}}\nDescription: {{description}}\nLanguage: {{language}}',
+  },
+  'interactive-html': {
+    id: 'interactive-html',
+    systemPrompt: 'Generate self-contained interactive HTML. Return JSON with html field.',
+    userPromptTemplate: 'Model: {{model}}\nTopic: {{title}}\nLanguage: {{language}}',
+  },
+  'interactive-actions': {
+    id: 'interactive-actions',
+    systemPrompt: 'Generate actions for interactive scene. Return strict JSON array.',
+    userPromptTemplate: 'Interactive content summary: {{contentSummary}}\nScript: {{script}}',
+  },
+  'pbl-actions': {
+    id: 'pbl-actions',
+    systemPrompt: 'Generate actions for project-based learning scene. Return strict JSON array.',
+    userPromptTemplate: 'PBL content summary: {{contentSummary}}\nScript: {{script}}',
+  },
+};
+
 /**
  * Get the prompts directory path
  */
@@ -40,6 +98,12 @@ export function loadSnippet(snippetId: SnippetId): string {
     snippetCache.set(snippetId, content);
     return content;
   } catch {
+    const fallback = FALLBACK_SNIPPETS[snippetId];
+    if (fallback) {
+      snippetCache.set(snippetId, fallback);
+      log.warn(`Snippet not found on disk, using fallback: ${snippetId}`);
+      return fallback;
+    }
     log.warn(`Snippet not found: ${snippetId}`);
     return `{{snippet:${snippetId}}}`;
   }
@@ -89,6 +153,12 @@ export function loadPrompt(promptId: PromptId): LoadedPrompt | null {
     promptCache.set(promptId, loaded);
     return loaded;
   } catch (error) {
+    const fallback = FALLBACK_PROMPTS[promptId];
+    if (fallback) {
+      promptCache.set(promptId, fallback);
+      log.warn(`Prompt template not found on disk, using fallback: ${promptId}`);
+      return fallback;
+    }
     log.error(`Failed to load prompt ${promptId}:`, error);
     return null;
   }
