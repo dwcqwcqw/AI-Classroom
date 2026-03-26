@@ -19,6 +19,6 @@ database_id = "d1f70870-c5f6-4e0c-83a0-3dac874a282b"
 # binding = "CACHE"
 # id = "<your-kv-namespace-id>"
 
-# [[r2_buckets]]
-# binding = "FILES"
-# bucket_name = "ai-classroom-files"
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "ai-classroom-files"

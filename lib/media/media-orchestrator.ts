@@ -174,7 +174,7 @@ async function generateSingleMedia(
     const blob = await fetchAsBlob(resultUrl);
     const posterBlob = posterUrl ? await fetchAsBlob(posterUrl).catch(() => undefined) : undefined;
 
-    // Store in IndexedDB
+    // Store in IndexedDB first
     await db.mediaFiles.put({
       id: mediaFileKey(stageId, req.elementId),
       stageId,
@@ -190,6 +190,25 @@ async function generateSingleMedia(
       }),
       createdAt: Date.now(),
     });
+
+    // Best-effort upload to shared cloud storage (R2)
+    try {
+      const fd = new FormData();
+      fd.append('stageId', stageId);
+      fd.append('kind', req.type === 'image' ? 'image' : 'video');
+      fd.append('file', new File([blob], `${req.elementId}.${req.type === 'image' ? 'png' : 'mp4'}`, { type: mimeType }));
+      await fetch('/api/shared/files', { method: 'POST', body: fd });
+
+      if (posterBlob) {
+        const pfd = new FormData();
+        pfd.append('stageId', stageId);
+        pfd.append('kind', 'image');
+        pfd.append('file', new File([posterBlob], `${req.elementId}-poster.png`, { type: 'image/png' }));
+        await fetch('/api/shared/files', { method: 'POST', body: pfd });
+      }
+    } catch {
+      // ignore cloud upload failure; local storage still works
+    }
 
     // Update store with object URL
     const objectUrl = URL.createObjectURL(blob);

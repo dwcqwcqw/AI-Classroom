@@ -41,4 +41,19 @@ export async function ensureSharedTables(db: D1DatabaseLike) {
       )`,
     )
     .run();
+
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS shared_files (
+        id TEXT PRIMARY KEY,
+        stage_id TEXT,
+        file_name TEXT NOT NULL,
+        object_key TEXT NOT NULL UNIQUE,
+        mime_type TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      )`,
+    )
+    .run();
 }
