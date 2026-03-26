@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import type { NextRequest } from 'next/server';
 import type { Scene, Stage } from '@/lib/types/stage';
+import { getSharedStage, saveSharedStage } from '@/lib/server/shared-data';
 
 export const CLASSROOMS_DIR = path.join(process.cwd(), 'data', 'classrooms');
 export const CLASSROOM_JOBS_DIR = path.join(process.cwd(), 'data', 'classroom-jobs');
@@ -46,6 +47,16 @@ export function isValidClassroomId(id: string): boolean {
 }
 
 export async function readClassroom(id: string): Promise<PersistedClassroomData | null> {
+  const shared = await getSharedStage(id);
+  if (shared?.stage && shared?.scenes) {
+    return {
+      id,
+      stage: shared.stage,
+      scenes: shared.scenes,
+      createdAt: new Date().toISOString(),
+    };
+  }
+
   const filePath = path.join(CLASSROOMS_DIR, `${id}.json`);
   try {
     const content = await fs.readFile(filePath, 'utf-8');
@@ -72,6 +83,13 @@ export async function persistClassroom(
     scenes: data.scenes,
     createdAt: new Date().toISOString(),
   };
+
+  await saveSharedStage(data.id, {
+    stage: data.stage,
+    scenes: data.scenes,
+    chats: [],
+    currentSceneId: data.scenes[0]?.id || null,
+  });
 
   await ensureClassroomsDir();
   const filePath = path.join(CLASSROOMS_DIR, `${data.id}.json`);
