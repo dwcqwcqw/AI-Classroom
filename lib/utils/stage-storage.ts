@@ -138,7 +138,42 @@ export async function getFirstSlideByStages(
         const firstSlide = storeData.scenes.find((s) => s.content?.type === 'slide');
         if (!firstSlide || firstSlide.content.type !== 'slide') return;
 
-        result[stageId] = structuredClone(firstSlide.content.canvas);
+        const slide = structuredClone(firstSlide.content.canvas);
+
+        // Resolve generated media placeholders (gen_img_*/gen_vid_*) from shared files API.
+        // On homepage we cannot rely on local media store, so map by uploaded filename prefix.
+        const placeholders = slide.elements.filter(
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (el: any) => el.type === 'image' && typeof el.src === 'string' && /^gen_(img|vid)_[\w-]+$/i.test(el.src),
+        ) as Array<{ src: string }>;
+
+        if (placeholders.length > 0) {
+          const filesRes = await fetch(`/api/shared/files?stageId=${encodeURIComponent(stageId)}`);
+          if (filesRes.ok) {
+            const filesJson = (await filesRes.json()) as {
+              success: boolean;
+              files?: Array<{ id: string; fileName: string; kind: string }>;
+            };
+            const files = filesJson.files ?? [];
+
+            const imageFileByElementId = new Map<string, string>();
+            for (const f of files) {
+              if (f.kind !== 'image') continue;
+              // Uploaded names are like: gen_img_xxx.png or gen_vid_xxx-poster.png
+              const base = f.fileName.replace(/\.[^.]+$/, '');
+              const normalized = base.endsWith('-poster') ? base.slice(0, -7) : base;
+              if (!imageFileByElementId.has(normalized)) {
+                imageFileByElementId.set(normalized, `/api/shared/files/${encodeURIComponent(f.id)}`);
+              }
+            }
+
+            for (const el of placeholders) {
+              el.src = imageFileByElementId.get(el.src) ?? '';
+            }
+          }
+        }
+
+        result[stageId] = slide;
       }),
     );
   } catch (error) {
