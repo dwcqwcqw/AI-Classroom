@@ -8,7 +8,7 @@
 import { Stage, Scene } from '../types/stage';
 import { ChatSession } from '../types/chat';
 import { db } from './database';
-import { saveChatSessions, loadChatSessions, deleteChatSessions } from './chat-storage';
+import { deleteChatSessions } from './chat-storage';
 import { clearPlaybackState } from './playback-storage';
 import { createLogger } from '@/lib/logger';
 
@@ -35,44 +35,16 @@ export interface StageListItem {
  */
 export async function saveStageData(stageId: string, data: StageStoreData): Promise<void> {
   try {
-    const now = Date.now();
-
-    // Save to stages table
-    await db.stages.put({
-      id: stageId,
-      name: data.stage.name || 'Untitled Stage',
-      description: data.stage.description,
-      createdAt: data.stage.createdAt || now,
-      updatedAt: now,
-      language: data.stage.language,
-      style: data.stage.style,
-      currentSceneId: data.currentSceneId || undefined,
+    const res = await fetch(`/api/shared/stages/${encodeURIComponent(stageId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data }),
     });
 
-    // Delete old scenes first to avoid orphaned data
-    await db.scenes.where('stageId').equals(stageId).delete();
-
-    // Save new scenes
-    if (data.scenes && data.scenes.length > 0) {
-      await db.scenes.bulkPut(
-        data.scenes.map((scene, index) => ({
-          ...scene,
-          stageId,
-          order: scene.order ?? index,
-          createdAt: scene.createdAt || now,
-          updatedAt: scene.updatedAt || now,
-        })),
-      );
-    }
-
-    // Save chat sessions to independent table
-    if (data.chats) {
-      await saveChatSessions(stageId, data.chats);
-    }
-
-    log.info(`Saved stage: ${stageId}`);
+    if (!res.ok) throw new Error(`Save shared stage failed: ${res.status}`);
+    log.info(`Saved shared stage: ${stageId}`);
   } catch (error) {
-    log.error('Failed to save stage:', error);
+    log.error('Failed to save shared stage:', error);
     throw error;
   }
 }
@@ -82,29 +54,13 @@ export async function saveStageData(stageId: string, data: StageStoreData): Prom
  */
 export async function loadStageData(stageId: string): Promise<StageStoreData | null> {
   try {
-    // Load stage
-    const stage = await db.stages.get(stageId);
-    if (!stage) {
-      log.info(`Stage not found: ${stageId}`);
-      return null;
-    }
+    const res = await fetch(`/api/shared/stages/${encodeURIComponent(stageId)}`);
+    if (!res.ok) return null;
 
-    // Load scenes
-    const scenes = await db.scenes.where('stageId').equals(stageId).sortBy('order');
-
-    // Load chat sessions from independent table
-    const chats = await loadChatSessions(stageId);
-
-    log.info(`Loaded stage: ${stageId}, scenes: ${scenes.length}, chats: ${chats.length}`);
-
-    return {
-      stage,
-      scenes,
-      currentSceneId: stage.currentSceneId || scenes[0]?.id || null,
-      chats,
-    };
+    const json = (await res.json()) as { success: boolean; data?: StageStoreData };
+    return json.data ?? null;
   } catch (error) {
-    log.error('Failed to load stage:', error);
+    log.error('Failed to load shared stage:', error);
     return null;
   }
 }
@@ -114,19 +70,18 @@ export async function loadStageData(stageId: string): Promise<StageStoreData | n
  */
 export async function deleteStageData(stageId: string): Promise<void> {
   try {
-    // Delete stage
-    await db.stages.delete(stageId);
+    const res = await fetch(`/api/shared/stages/${encodeURIComponent(stageId)}`, {
+      method: 'DELETE',
+    });
+    if (!res.ok) throw new Error(`Delete shared stage failed: ${res.status}`);
 
-    // Delete scenes
-    await db.scenes.where('stageId').equals(stageId).delete();
-
-    // Delete chat sessions and playback state
+    // Also clear local playback/chat caches for current browser session
     await deleteChatSessions(stageId);
     await clearPlaybackState(stageId);
 
-    log.info(`Deleted stage: ${stageId}`);
+    log.info(`Deleted shared stage: ${stageId}`);
   } catch (error) {
-    log.error('Failed to delete stage:', error);
+    log.error('Failed to delete shared stage:', error);
     throw error;
   }
 }
@@ -136,26 +91,13 @@ export async function deleteStageData(stageId: string): Promise<void> {
  */
 export async function listStages(): Promise<StageListItem[]> {
   try {
-    const stages = await db.stages.orderBy('updatedAt').reverse().toArray();
+    const res = await fetch('/api/shared/stages');
+    if (!res.ok) return [];
 
-    const stageList: StageListItem[] = await Promise.all(
-      stages.map(async (stage) => {
-        const sceneCount = await db.scenes.where('stageId').equals(stage.id).count();
-
-        return {
-          id: stage.id,
-          name: stage.name,
-          description: stage.description,
-          sceneCount,
-          createdAt: stage.createdAt,
-          updatedAt: stage.updatedAt,
-        };
-      }),
-    );
-
-    return stageList;
+    const json = (await res.json()) as { success: boolean; stages?: StageListItem[] };
+    return json.stages ?? [];
   } catch (error) {
-    log.error('Failed to list stages:', error);
+    log.error('Failed to list shared stages:', error);
     return [];
   }
 }
