@@ -121,39 +121,24 @@ export async function getFirstSlideByStages(
   try {
     await Promise.all(
       stageIds.map(async (stageId) => {
-        const scenes = await db.scenes.where('stageId').equals(stageId).sortBy('order');
-        const firstSlide = scenes.find((s) => s.content?.type === 'slide');
-        if (firstSlide && firstSlide.content.type === 'slide') {
-          const slide = structuredClone(firstSlide.content.canvas);
+        const res = await fetch(`/api/shared/stages/${encodeURIComponent(stageId)}`);
+        if (!res.ok) return;
 
-          // Resolve gen_img_* placeholders from mediaFiles
-          const placeholderEls = slide.elements.filter(
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (el: any) => el.type === 'image' && /^gen_(img|vid)_[\w-]+$/i.test(el.src as string),
-          );
-          if (placeholderEls.length > 0) {
-            const mediaRecords = await db.mediaFiles.where('stageId').equals(stageId).toArray();
-            const mediaMap = new Map(
-              mediaRecords.map((r) => {
-                // Key format: stageId:elementId → extract elementId
-                const elementId = r.id.includes(':') ? r.id.split(':').slice(1).join(':') : r.id;
-                return [elementId, r.blob] as const;
-              }),
-            );
-            for (const el of placeholderEls as Array<{ src: string }>) {
-              const blob = mediaMap.get(el.src);
-              if (blob) {
-                el.src = URL.createObjectURL(blob);
-              } else {
-                // Clear unresolved placeholder so BaseImageElement won't subscribe
-                // to the global media store (which may have stale data from another course)
-                el.src = '';
-              }
-            }
-          }
+        const json = (await res.json()) as {
+          success: boolean;
+          data?: StageStoreData | { data?: StageStoreData };
+        };
+        const payload = json.data;
+        if (!payload) return;
 
-          result[stageId] = slide;
-        }
+        const storeData =
+          'stage' in payload ? (payload as StageStoreData) : ((payload.data ?? null) as StageStoreData | null);
+        if (!storeData) return;
+
+        const firstSlide = storeData.scenes.find((s) => s.content?.type === 'slide');
+        if (!firstSlide || firstSlide.content.type !== 'slide') return;
+
+        result[stageId] = structuredClone(firstSlide.content.canvas);
       }),
     );
   } catch (error) {
