@@ -10,11 +10,10 @@ binding = "ASSETS"
 [vars]
 NODE_ENV = "production"
 
-# Optional examples for future backend storage:
-# [[d1_databases]]
-# binding = "DB"
-# database_name = "ai-classroom-db"
-# database_id = "<your-d1-database-id>"
+[[d1_databases]]
+binding = "DB"
+database_name = "ai-classroom-db"
+database_id = "d1f70870-c5f6-4e0c-83a0-3dac874a282b"
 
 # [[kv_namespaces]]
 # binding = "CACHE"
