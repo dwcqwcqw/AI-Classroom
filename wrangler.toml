@@ -1,0 +1,21 @@
+name = "ai-classroom"
+compatibility_date = "2026-03-26"
+compatibility_flags = ["nodejs_compat"]
+pages_build_output_dir = ".vercel/output/static"
+
+[vars]
+NODE_ENV = "production"
+
+# Optional examples for future backend storage:
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "ai-classroom-db"
+# database_id = "<your-d1-database-id>"
+
+# [[kv_namespaces]]
+# binding = "CACHE"
+# id = "<your-kv-namespace-id>"
+
+# [[r2_buckets]]
+# binding = "FILES"
+# bucket_name = "ai-classroom-files"
