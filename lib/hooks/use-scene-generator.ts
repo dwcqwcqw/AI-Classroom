@@ -32,6 +32,26 @@ interface SceneActionsResult {
   error?: string;
 }
 
+const GENERATION_MAX_RETRIES = 2;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function formatRetryError(
+  phase: 'content' | 'actions' | 'tts',
+  outlineTitle: string,
+  attempts: number,
+  reason?: string,
+): string {
+  const suffix = reason ? ` 原因: ${reason}` : '';
+  return `场景「${outlineTitle}」在${phase}阶段重试${attempts}次后仍失败。${suffix}`;
+}
+
+function shouldRetryHttpStatus(status: number): boolean {
+  return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
+}
+
 export function splitLongSpeechText(text: string, maxLength: number): string[] {
   const normalized = text.trim();
   if (!normalized || normalized.length <= maxLength) return [normalized];
@@ -161,19 +181,60 @@ async function fetchSceneContent(
   },
   signal?: AbortSignal,
 ): Promise<SceneContentResult> {
-  const response = await fetch('/api/generate/scene-content', {
-    method: 'POST',
-    headers: getApiHeaders(),
-    body: JSON.stringify(params),
-    signal,
-  });
+  const maxAttempts = GENERATION_MAX_RETRIES + 1;
+  let lastError = '';
 
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({ error: 'Request failed' }));
-    return { success: false, error: data.error || `HTTP ${response.status}` };
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await fetch('/api/generate/scene-content', {
+        method: 'POST',
+        headers: getApiHeaders(),
+        body: JSON.stringify(params),
+        signal,
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({ error: 'Request failed' }));
+        const reason = data.error || `HTTP ${response.status}`;
+        lastError = reason;
+
+        if (attempt < maxAttempts && shouldRetryHttpStatus(response.status)) {
+          const backoff = 1200 * attempt;
+          log.warn(
+            `Scene content failed for ${params.outline.id} (attempt ${attempt}/${maxAttempts}), retrying in ${backoff}ms: ${reason}`,
+          );
+          await sleep(backoff);
+          continue;
+        }
+
+        return {
+          success: false,
+          error: formatRetryError('content', params.outline.title, attempt - 1, reason),
+        };
+      }
+
+      return response.json();
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      if (attempt < maxAttempts) {
+        const backoff = 1200 * attempt;
+        log.warn(
+          `Scene content exception for ${params.outline.id} (attempt ${attempt}/${maxAttempts}), retrying in ${backoff}ms: ${lastError}`,
+        );
+        await sleep(backoff);
+        continue;
+      }
+      return {
+        success: false,
+        error: formatRetryError('content', params.outline.title, attempt - 1, lastError),
+      };
+    }
   }
 
-  return response.json();
+  return {
+    success: false,
+    error: formatRetryError('content', params.outline.title, GENERATION_MAX_RETRIES, lastError),
+  };
 }
 
 /** Call POST /api/generate/scene-actions (step 2) */
@@ -189,19 +250,60 @@ async function fetchSceneActions(
   },
   signal?: AbortSignal,
 ): Promise<SceneActionsResult> {
-  const response = await fetch('/api/generate/scene-actions', {
-    method: 'POST',
-    headers: getApiHeaders(),
-    body: JSON.stringify(params),
-    signal,
-  });
+  const maxAttempts = GENERATION_MAX_RETRIES + 1;
+  let lastError = '';
 
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({ error: 'Request failed' }));
-    return { success: false, error: data.error || `HTTP ${response.status}` };
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const response = await fetch('/api/generate/scene-actions', {
+        method: 'POST',
+        headers: getApiHeaders(),
+        body: JSON.stringify(params),
+        signal,
+      });
+
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({ error: 'Request failed' }));
+        const reason = data.error || `HTTP ${response.status}`;
+        lastError = reason;
+
+        if (attempt < maxAttempts && shouldRetryHttpStatus(response.status)) {
+          const backoff = 1200 * attempt;
+          log.warn(
+            `Scene actions failed for ${params.outline.id} (attempt ${attempt}/${maxAttempts}), retrying in ${backoff}ms: ${reason}`,
+          );
+          await sleep(backoff);
+          continue;
+        }
+
+        return {
+          success: false,
+          error: formatRetryError('actions', params.outline.title, attempt - 1, reason),
+        };
+      }
+
+      return response.json();
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      if (attempt < maxAttempts) {
+        const backoff = 1200 * attempt;
+        log.warn(
+          `Scene actions exception for ${params.outline.id} (attempt ${attempt}/${maxAttempts}), retrying in ${backoff}ms: ${lastError}`,
+        );
+        await sleep(backoff);
+        continue;
+      }
+      return {
+        success: false,
+        error: formatRetryError('actions', params.outline.title, attempt - 1, lastError),
+      };
+    }
   }
 
-  return response.json();
+  return {
+    success: false,
+    error: formatRetryError('actions', params.outline.title, GENERATION_MAX_RETRIES, lastError),
+  };
 }
 
 /** Generate TTS for one speech action and store in IndexedDB */
@@ -209,6 +311,7 @@ export async function generateAndStoreTTS(
   audioId: string,
   text: string,
   signal?: AbortSignal,
+  voiceOverride?: string,
 ): Promise<void> {
   const settings = useSettingsStore.getState();
   if (settings.ttsProviderId === 'browser-native-tts') return;
@@ -221,7 +324,7 @@ export async function generateAndStoreTTS(
       text,
       audioId,
       ttsProviderId: settings.ttsProviderId,
-      ttsVoice: settings.ttsVoice,
+      ttsVoice: voiceOverride ?? settings.ttsVoice,
       ttsSpeed: settings.ttsSpeed,
       ttsApiKey: ttsProviderConfig?.apiKey || undefined,
       ttsBaseUrl: ttsProviderConfig?.baseUrl || undefined,
@@ -257,6 +360,7 @@ export async function generateAndStoreTTS(
 /** Generate TTS for all speech actions in a scene. Returns result. */
 async function generateTTSForScene(
   scene: Scene,
+  outlineTitle: string,
   signal?: AbortSignal,
 ): Promise<{ success: boolean; failedCount: number; error?: string }> {
   const providerId = useSettingsStore.getState().ttsProviderId;
@@ -272,24 +376,45 @@ async function generateTTSForScene(
   for (const action of speechActions) {
     const audioId = `tts_${action.id}`;
     action.audioId = audioId;
-    try {
-      await generateAndStoreTTS(audioId, action.text, signal);
-    } catch (error) {
+
+    const maxAttempts = GENERATION_MAX_RETRIES + 1;
+    let success = false;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await generateAndStoreTTS(audioId, action.text, signal, action.voice);
+        success = true;
+        break;
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : `TTS failed for action ${action.id}`;
+        const canRetry = attempt < maxAttempts;
+        log.warn('TTS generation failed:', {
+          providerId,
+          actionId: action.id,
+          textLength: action.text.length,
+          attempt,
+          maxAttempts,
+          error: lastError,
+        });
+        if (canRetry) {
+          const backoff = 800 * attempt;
+          await sleep(backoff);
+          continue;
+        }
+      }
+    }
+
+    if (!success) {
       failedCount++;
-      lastError = error instanceof Error ? error.message : `TTS failed for action ${action.id}`;
-      log.warn('TTS generation failed:', {
-        providerId,
-        actionId: action.id,
-        textLength: action.text.length,
-        error: lastError,
-      });
     }
   }
 
   return {
     success: failedCount === 0,
     failedCount,
-    error: lastError,
+    error:
+      failedCount > 0
+        ? formatRetryError('tts', outlineTitle, GENERATION_MAX_RETRIES, lastError)
+        : undefined,
   };
 }
 
@@ -413,7 +538,9 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
               pausedByFailureOrAbort = true;
               break;
             }
-            store.getState().addFailedOutline(outline);
+            store
+              .getState()
+              .addFailedOutline(outline, 'content', contentResult.error || 'Content generation failed');
             options.onSceneFailed?.(outline, contentResult.error || 'Content generation failed');
             store.getState().setGenerationStatus('paused');
             pausedByFailureOrAbort = true;
@@ -447,13 +574,15 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
 
             // TTS generation — failure means the whole scene fails
             if (settings.ttsEnabled && settings.ttsProviderId !== 'browser-native-tts') {
-              const ttsResult = await generateTTSForScene(scene, signal);
+              const ttsResult = await generateTTSForScene(scene, outline.title, signal);
               if (!ttsResult.success) {
                 if (abortRef.current || store.getState().generationEpoch !== startEpoch) {
                   pausedByFailureOrAbort = true;
                   break;
                 }
-                store.getState().addFailedOutline(outline);
+                store
+                  .getState()
+                  .addFailedOutline(outline, 'tts', ttsResult.error || 'TTS generation failed');
                 options.onSceneFailed?.(outline, ttsResult.error || 'TTS generation failed');
                 store.getState().setGenerationStatus('paused');
                 pausedByFailureOrAbort = true;
@@ -476,7 +605,9 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
               pausedByFailureOrAbort = true;
               break;
             }
-            store.getState().addFailedOutline(outline);
+            store
+              .getState()
+              .addFailedOutline(outline, 'actions', actionsResult.error || 'Actions generation failed');
             options.onSceneFailed?.(outline, actionsResult.error || 'Actions generation failed');
             store.getState().setGenerationStatus('paused');
             pausedByFailureOrAbort = true;
@@ -521,7 +652,8 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
   const retrySingleOutline = useCallback(
     async (outlineId: string) => {
       const state = store.getState();
-      const outline = state.failedOutlines.find((o) => o.id === outlineId);
+      const failed = state.failedOutlines.find((o) => o.outline.id === outlineId);
+      const outline = failed?.outline;
       const params = lastParamsRef.current;
       if (!outline || !state.stage || !params) return;
 
@@ -558,7 +690,9 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
         );
 
         if (!contentResult.success || !contentResult.content) {
-          store.getState().addFailedOutline(outline);
+          store
+            .getState()
+            .addFailedOutline(outline, 'content', contentResult.error || 'Content generation failed');
           return;
         }
 
@@ -585,16 +719,20 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
         );
 
         if (!actionsResult.success || !actionsResult.scene) {
-          store.getState().addFailedOutline(outline);
+          store
+            .getState()
+            .addFailedOutline(outline, 'actions', actionsResult.error || 'Actions generation failed');
           return;
         }
 
         // Step 3: TTS
         const settings = useSettingsStore.getState();
         if (settings.ttsEnabled && settings.ttsProviderId !== 'browser-native-tts') {
-          const ttsResult = await generateTTSForScene(actionsResult.scene, signal);
+          const ttsResult = await generateTTSForScene(actionsResult.scene, outline.title, signal);
           if (!ttsResult.success) {
-            store.getState().addFailedOutline(outline);
+            store
+              .getState()
+              .addFailedOutline(outline, 'tts', ttsResult.error || 'TTS generation failed');
             return;
           }
         }
@@ -608,7 +746,13 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
         }
       } catch (err) {
         if (!(err instanceof DOMException && err.name === 'AbortError')) {
-          store.getState().addFailedOutline(outline);
+          store
+            .getState()
+            .addFailedOutline(
+              outline,
+              'unknown',
+              err instanceof Error ? err.message : 'Retry generation failed',
+            );
         }
       }
     },

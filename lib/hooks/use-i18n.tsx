@@ -26,9 +26,9 @@ export function I18nProvider({ children }: { children: ReactNode }) {
         setLocaleState(stored as Locale);
         return;
       }
-      const detected = navigator.language?.startsWith('zh') ? 'zh-CN' : 'en-US';
-      localStorage.setItem(LOCALE_STORAGE_KEY, detected);
-      setLocaleState(detected);
+      // Default to zh-CN; only switch to en-US if user has explicitly stored that preference
+      localStorage.setItem(LOCALE_STORAGE_KEY, defaultLocale);
+      setLocaleState(defaultLocale);
     } catch {
       // localStorage unavailable, keep default
     }

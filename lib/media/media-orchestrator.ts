@@ -24,6 +24,22 @@ class MediaApiError extends Error {
   }
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isRetryableRateLimitError(error: unknown): boolean {
+  if (!(error instanceof MediaApiError) && !(error instanceof Error)) return false;
+  const message = error.message || '';
+  const errorCode = error instanceof MediaApiError ? error.errorCode || '' : '';
+  return (
+    message.includes('429') ||
+    message.includes('Throttling.RateQuota') ||
+    message.includes('rate limit') ||
+    errorCode === 'RATE_LIMIT'
+  );
+}
+
 /**
  * Launch media generation for all mediaGenerations declared in outlines.
  * Runs in parallel with content/action generation — does not block.
@@ -115,9 +131,33 @@ async function generateSingleMedia(
     let mimeType: string;
 
     if (req.type === 'image') {
-      const result = await callImageApi(req, abortSignal);
-      resultUrl = result.url;
-      mimeType = 'image/png';
+      // Retry on provider-side rate limiting (429 / Throttling.RateQuota)
+      const maxAttempts = 3;
+      let lastError: unknown;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          const result = await callImageApi(req, abortSignal);
+          resultUrl = result.url;
+          mimeType = 'image/png';
+          lastError = undefined;
+          break;
+        } catch (error) {
+          lastError = error;
+          if (abortSignal?.aborted) return;
+
+          const canRetry = isRetryableRateLimitError(error) && attempt < maxAttempts;
+          if (!canRetry) {
+            throw error;
+          }
+
+          const backoffMs = attempt === 1 ? 1500 : 3500;
+          log.warn(
+            `Rate limited for ${req.elementId}, retrying (${attempt}/${maxAttempts}) after ${backoffMs}ms`,
+          );
+          await sleep(backoffMs);
+        }
+      }
+      if (lastError) throw lastError;
     } else {
       const result = await callVideoApi(req, abortSignal);
       resultUrl = result.url;

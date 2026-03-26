@@ -29,6 +29,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { AlertTriangle } from 'lucide-react';
 import { VisuallyHidden } from 'radix-ui';
+import { useLiveTTS } from '@/lib/hooks/use-live-tts';
 
 /**
  * Stage Component
@@ -97,6 +98,20 @@ export function Stage({
   // Whiteboard state (from canvas store so AI tools can open it)
   const whiteboardOpen = useCanvasStore.use.whiteboardOpen();
   const setWhiteboardOpen = useCanvasStore.use.setWhiteboardOpen();
+
+  // Track whether we've paused the buffer waiting for live TTS audio to finish
+  const bufferPausedForTTSRef = useRef(false);
+  const lastLiveAgentIdRef = useRef<string | null>(null);
+
+  // Live TTS for Q&A / discussion agent responses
+  const { onLiveSpeech: liveTTSOnSpeech, stopAll: stopLiveTTS, isActive: isTTSActive } = useLiveTTS({
+    onQueueEmpty: useCallback(() => {
+      if (bufferPausedForTTSRef.current) {
+        bufferPausedForTTSRef.current = false;
+        chatAreaRef.current?.resumeActiveBuffer();
+      }
+    }, []),
+  });
 
   // Selected agents from settings store (Zustand)
   const selectedAgentIds = useSettingsStore((s) => s.selectedAgentIds);
@@ -230,6 +245,9 @@ export function Stage({
   useEffect(() => {
     // Bump epoch so any stale SSE callbacks from the previous scene are discarded
     sceneEpochRef.current++;
+    // Stop any live TTS audio playing from previous scene and clear pause state
+    stopLiveTTS();
+    bufferPausedForTTSRef.current = false;
 
     // End any active QA/discussion session — this synchronously aborts the SSE
     // stream inside use-chat-sessions (abortControllerRef.abort()), preventing
@@ -721,7 +739,7 @@ export function Stage({
             hideToolbar={mode === 'playback'}
             isPendingScene={isPendingScene}
             isGenerationFailed={
-              isPendingScene && failedOutlines.some((f) => f.id === generatingOutlines[0]?.id)
+              isPendingScene && failedOutlines.some((f) => f.outline.id === generatingOutlines[0]?.id)
             }
             onRetryGeneration={
               onRetryOutline && generatingOutlines[0]
@@ -839,6 +857,29 @@ export function Stage({
         onActiveBubble={(id) => setActiveBubbleId(id)}
         currentSceneId={currentSceneId}
         onLiveSpeech={(text, agentId) => {
+          // Trigger live TTS immediately so text+audio progress in sync.
+          liveTTSOnSpeech(text, agentId);
+
+          const nextAgentId = agentId ?? null;
+          const prevAgentId = lastLiveAgentIdRef.current;
+
+          // If speaker switches while previous audio queue is still active,
+          // pause upcoming text reveal until audio catches up.
+          if (
+            nextAgentId &&
+            prevAgentId &&
+            nextAgentId !== prevAgentId &&
+            !bufferPausedForTTSRef.current &&
+            isTTSActive()
+          ) {
+            bufferPausedForTTSRef.current = true;
+            chatAreaRef.current?.pauseActiveBuffer();
+          }
+
+          if (nextAgentId) {
+            lastLiveAgentIdRef.current = nextAgentId;
+          }
+
           // Capture epoch at call time — discard if scene has changed since
           const epoch = sceneEpochRef.current;
           // Use queueMicrotask to let any pending scene-switch reset settle first
@@ -854,6 +895,7 @@ export function Stage({
               setIsTopicPending(false);
             } else if (text === null && agentId === null) {
               setChatIsStreaming(false);
+              lastLiveAgentIdRef.current = null;
               // Don't clear chatSessionType here — it's needed by the stop
               // button when director cues user (cue_user → done → liveSpeech null).
               // It gets properly cleared in doSessionCleanup and scene change.

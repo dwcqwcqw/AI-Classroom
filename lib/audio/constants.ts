@@ -606,6 +606,30 @@ export const TTS_PROVIDERS: Record<TTSProviderId, TTSProviderConfig> = {
     supportedFormats: ['mp3', 'wav', 'pcm'],
   },
 
+  'doubao-tts': {
+    id: 'doubao-tts',
+    name: '豆包 TTS (火山引擎)',
+    requiresApiKey: true,
+    // Volcano Engine Speech API endpoint
+    // apiKey format: "appid|access_token" (e.g. "6467989151|92rcrBLC...")
+    defaultBaseUrl: 'https://openspeech.bytedance.com',
+    icon: '/logos/doubao.svg',
+    voices: [
+      { id: 'BV001_streaming', name: '通用女声', language: 'zh-CN', gender: 'female' as const },
+      { id: 'BV002_streaming', name: '通用男声', language: 'zh-CN', gender: 'male' as const },
+      { id: 'BV700_streaming', name: '灿灿 (甜美女声)', language: 'zh-CN', gender: 'female' as const },
+      { id: 'BV701_streaming', name: '擎苍 (清澈男声)', language: 'zh-CN', gender: 'male' as const },
+      { id: 'BV702_streaming', name: '炀 (磁性男声)', language: 'zh-CN', gender: 'male' as const },
+      { id: 'BV703_streaming', name: '晓彤 (活泼女声)', language: 'zh-CN', gender: 'female' as const },
+      { id: 'BV705_streaming', name: '小清 (温柔女声)', language: 'zh-CN', gender: 'female' as const },
+      { id: 'BV706_streaming', name: '雯雯 (成熟女声)', language: 'zh-CN', gender: 'female' as const },
+      { id: 'BV707_streaming', name: '阳光男声', language: 'zh-CN', gender: 'male' as const },
+      { id: 'BV708_streaming', name: '儒雅男声', language: 'zh-CN', gender: 'male' as const },
+    ],
+    supportedFormats: ['mp3'],
+    speedRange: { min: 0.5, max: 2.0, default: 1.0 },
+  },
+
   'browser-native-tts': {
     id: 'browser-native-tts',
     name: '浏览器原生 (Web Speech API)',
@@ -833,6 +857,7 @@ export const DEFAULT_TTS_VOICES: Record<TTSProviderId, string> = {
   'azure-tts': 'zh-CN-XiaoxiaoNeural',
   'glm-tts': 'tongtong',
   'qwen-tts': 'Cherry',
+  'doubao-tts': 'BV001_streaming',
   'browser-native-tts': 'default',
 };
 

@@ -12,6 +12,7 @@ export interface AgentConfig {
   color: string; // UI theme color (hex)
   allowedActions: string[]; // Action types this agent can use
   priority: number; // Priority for director selection (1-10)
+  ttsVoice?: string; // TTS voice ID for this agent (e.g. 'onyx', 'nova')
 
   // Metadata
   createdAt: Date;
@@ -32,6 +33,7 @@ export interface AgentTemplate {
   color: string;
   allowedActions: string[];
   priority: number;
+  ttsVoice?: string; // TTS voice ID for this agent
 
   // LLM-generated agent fields
   isGenerated?: boolean; // true for LLM-generated agents

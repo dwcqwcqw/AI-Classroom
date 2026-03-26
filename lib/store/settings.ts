@@ -256,7 +256,7 @@ const getDefaultProvidersConfig = (): ProvidersConfig => {
 const getDefaultAudioConfig = () => ({
   ttsProviderId: 'browser-native-tts' as TTSProviderId,
   ttsVoice: 'default',
-  ttsSpeed: 1.0,
+  ttsSpeed: 1.2,
   asrProviderId: 'browser-native' as ASRProviderId,
   asrLanguage: 'zh',
   ttsProvidersConfig: {
@@ -264,6 +264,7 @@ const getDefaultAudioConfig = () => ({
     'azure-tts': { apiKey: '', baseUrl: '', enabled: false },
     'glm-tts': { apiKey: '', baseUrl: '', enabled: false },
     'qwen-tts': { apiKey: '', baseUrl: '', enabled: false },
+    'doubao-tts': { apiKey: '', baseUrl: '', enabled: false },
     'browser-native-tts': { apiKey: '', baseUrl: '', enabled: true },
   } as Record<TTSProviderId, { apiKey: string; baseUrl: string; enabled: boolean }>,
   asrProvidersConfig: {
@@ -871,6 +872,19 @@ export const useSettingsStore = create<SettingsState>()(
                 }
               }
 
+              // Always re-select TTS if the current provider has no key at all
+              // (catches cases where a previously configured provider's key was removed)
+              if (!autoTtsProvider && state.ttsProviderId !== 'browser-native-tts') {
+                const serverTtsIds = Object.keys(data.tts) as TTSProviderId[];
+                const currentTTSCfg = newTTSConfig[state.ttsProviderId];
+                const currentHasKey =
+                  currentTTSCfg?.isServerConfigured || !!currentTTSCfg?.apiKey;
+                if (!currentHasKey && serverTtsIds.length > 0) {
+                  autoTtsProvider = serverTtsIds[0];
+                  autoTtsVoice = DEFAULT_TTS_VOICES[autoTtsProvider] || 'default';
+                }
+              }
+
               // LLM auto-select: when modelId is empty
               let autoProviderId: ProviderId | undefined;
               let autoModelId: string | undefined;
@@ -933,7 +947,7 @@ export const useSettingsStore = create<SettingsState>()(
     },
     {
       name: 'settings-storage',
-      version: 2,
+      version: 3,
       // Migrate persisted state
       migrate: (persistedState: unknown, version: number) => {
         const state = persistedState as Partial<SettingsState>;
@@ -989,6 +1003,11 @@ export const useSettingsStore = create<SettingsState>()(
         if (version < 2) {
           delete (state as Record<string, unknown>).deepResearchProviderId;
           delete (state as Record<string, unknown>).deepResearchProvidersConfig;
+        }
+
+        // v2 → v3: Upgrade default ttsSpeed from 1.0 to 1.2
+        if (version < 3 && (state.ttsSpeed === undefined || state.ttsSpeed === 1.0)) {
+          state.ttsSpeed = 1.2;
         }
 
         // Add default media generation toggles if missing

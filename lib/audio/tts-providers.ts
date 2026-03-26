@@ -130,6 +130,9 @@ export async function generateTTS(
     case 'qwen-tts':
       return await generateQwenTTS(config, text);
 
+    case 'doubao-tts':
+      return await generateDoubaoTTS(config, text);
+
     case 'browser-native-tts':
       throw new Error(
         'Browser Native TTS must be handled client-side using Web Speech API. This provider cannot be used on the server.',
@@ -172,7 +175,7 @@ async function generateOpenAITTS(
   const arrayBuffer = await response.arrayBuffer();
   return {
     audio: new Uint8Array(arrayBuffer),
-    format: 'mp3',
+    format: 'wav',
   };
 }
 
@@ -234,6 +237,8 @@ async function generateGLMTTS(config: TTSModelConfig, text: string): Promise<TTS
       voice: config.voice,
       speed: config.speed || 1.0,
       volume: 1.0,
+      // GLM compatibility: some keys/models reject mp3 with code 1214.
+      // Keep wav as the default stable format.
       response_format: 'wav',
     }),
   });
@@ -255,7 +260,7 @@ async function generateGLMTTS(config: TTSModelConfig, text: string): Promise<TTS
   const arrayBuffer = await response.arrayBuffer();
   return {
     audio: new Uint8Array(arrayBuffer),
-    format: 'wav',
+    format: 'mp3',
   };
 }
 
@@ -313,6 +318,110 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
   return {
     audio: new Uint8Array(arrayBuffer),
     format: 'wav', // Qwen3 TTS returns WAV format
+  };
+}
+
+/**
+ * Doubao TTS implementation — Volcano Engine Speech API V1
+ *
+ * API docs: https://www.volcengine.com/docs/6561/79823
+ *
+ * Authentication:
+ *   apiKey format: "appid|access_token"  (pipe-delimited)
+ *   e.g. "6467989151|92rcrBLCbBeJ--IMm6fKcAKmXNiifLAc1"
+ *
+ * Request:
+ *   POST {baseUrl}/api/v1/tts
+ *   Authorization: Bearer;{access_token}
+ *
+ * Cluster defaults to "volcano_tts" (standard Chinese TTS).
+ * Override by appending "|cluster_name" as a third segment in apiKey.
+ */
+async function generateDoubaoTTS(
+  config: TTSModelConfig,
+  text: string,
+): Promise<TTSGenerationResult> {
+  const baseUrl = (config.baseUrl || TTS_PROVIDERS['doubao-tts'].defaultBaseUrl)!;
+
+  // Parse apiKey: "appid|access_token" or "appid|access_token|cluster"
+  const parts = (config.apiKey || '').split('|');
+  if (parts.length < 2 || !parts[0] || !parts[1]) {
+    throw new Error(
+      'Doubao TTS: invalid apiKey format. Expected "appid|access_token" ' +
+        '(e.g. "6467989151|92rcrBLCbBeJ--IMm6fKcAKmXNiifLAc1")',
+    );
+  }
+  const appid = parts[0].trim();
+  const accessToken = parts[1].trim();
+  const cluster = (parts[2] || 'volcano_tts').trim();
+
+  const reqid = `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+
+  const speedRatio = config.speed ?? 1.0;
+
+  const body = {
+    app: {
+      appid,
+      token: accessToken,
+      cluster,
+    },
+    user: {
+      uid: 'openmaic_user',
+    },
+    audio: {
+      voice_type: config.voice || 'BV001_streaming',
+      encoding: 'mp3',
+      speed_ratio: speedRatio,
+      volume_ratio: 1.0,
+      pitch_ratio: 1.0,
+    },
+    request: {
+      reqid,
+      text,
+      text_type: 'plain',
+      operation: 'query',
+    },
+  };
+
+  const response = await fetch(`${baseUrl}/api/v1/tts`, {
+    method: 'POST',
+    headers: {
+      // Note: Volcano Engine uses "Bearer;" (semicolon) not "Bearer " (space)
+      Authorization: `Bearer;${accessToken}`,
+      'Content-Type': 'application/json; charset=utf-8',
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => response.statusText);
+    throw new Error(`Doubao TTS HTTP error ${response.status}: ${errorText}`);
+  }
+
+  const data = await response.json().catch(() => {
+    throw new Error('Doubao TTS: invalid JSON response');
+  });
+
+  // Volcano Engine returns code 3000 on success; audio is base64 in data.data
+  if (data.code !== 3000) {
+    throw new Error(
+      `Doubao TTS API error: ${data.message || 'unknown'} (code: ${data.code})`,
+    );
+  }
+
+  if (!data.data) {
+    throw new Error('Doubao TTS: empty audio data in response');
+  }
+
+  const binary = atob(data.data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+
+  return {
+    audio: bytes,
+    format: 'mp3',
   };
 }
 

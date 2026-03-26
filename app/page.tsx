@@ -1,13 +1,13 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   ArrowUp,
   Check,
   ChevronDown,
-  Clock,
   Copy,
   ImagePlus,
   Pencil,
@@ -18,6 +18,7 @@ import {
   Monitor,
   BotOff,
   ChevronUp,
+  X,
 } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { createLogger } from '@/lib/logger';
@@ -131,6 +132,18 @@ function HomePage() {
   const [error, setError] = useState<string | null>(null);
   const [classrooms, setClassrooms] = useState<StageListItem[]>([]);
   const [thumbnails, setThumbnails] = useState<Record<string, Slide>>({});
+  const [books, setBooks] = useState<
+    Array<{
+      id: string;
+      title: string;
+      author: string;
+      intro: string;
+      cover: string;
+      category: string;
+      recommended: boolean;
+      bestseller: boolean;
+    }>
+  >([]);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -171,6 +184,11 @@ function HomePage() {
 
     // eslint-disable-next-line react-hooks/set-state-in-effect -- Store hydration on mount
     loadClassrooms();
+
+    fetch('/api/books/library')
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('Failed to load books'))))
+      .then((data) => setBooks(data?.data?.books || []))
+      .catch(() => setBooks([]));
   }, []);
 
   const handleDelete = (id: string, e: React.MouseEvent) => {
@@ -323,7 +341,7 @@ function HomePage() {
   };
 
   return (
-    <div className="min-h-[100dvh] w-full bg-gradient-to-b from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900 flex flex-col items-center p-4 pt-16 md:p-8 md:pt-16 overflow-x-hidden">
+    <div className="flex min-h-[100dvh] w-full flex-col items-center overflow-x-hidden bg-gradient-to-b from-slate-50 to-slate-100 p-3 pt-14 dark:from-slate-950 dark:to-slate-900 sm:p-4 sm:pt-16 md:p-8 md:pt-16">
       {/* ═══ Top-right pill (unchanged) ═══ */}
       <div
         ref={toolbarRef}
@@ -494,7 +512,7 @@ function HomePage() {
       >
         {/* ── Logo ── */}
         <motion.img
-          src="/logo-horizontal.png"
+          src="/logo-black.svg"
           alt="OpenMAIC"
           initial={{ opacity: 0, scale: 0.9 }}
           animate={{ opacity: 1, scale: 1 }}
@@ -607,87 +625,83 @@ function HomePage() {
         </AnimatePresence>
       </motion.div>
 
-      {/* ═══ Recent classrooms — collapsible ═══ */}
-      {classrooms.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.5 }}
-          className="relative z-10 mt-10 w-full max-w-6xl flex flex-col items-center"
-        >
-          {/* Trigger — divider-line with centered text */}
-          <button
-            onClick={() => {
-              const next = !recentOpen;
-              setRecentOpen(next);
-              try {
-                localStorage.setItem(RECENT_OPEN_STORAGE_KEY, String(next));
-              } catch {
-                /* ignore */
-              }
-            }}
-            className="group w-full flex items-center gap-4 py-2 cursor-pointer"
-          >
-            <div className="flex-1 h-px bg-border/40 group-hover:bg-border/70 transition-colors" />
-            <span className="shrink-0 flex items-center gap-2 text-[13px] text-muted-foreground/60 group-hover:text-foreground/70 transition-colors select-none">
-              <Clock className="size-3.5" />
-              {t('classroom.recentClassrooms')}
-              <span className="text-[11px] tabular-nums opacity-60">{classrooms.length}</span>
-              <motion.div
-                animate={{ rotate: recentOpen ? 180 : 0 }}
-                transition={{ duration: 0.3, ease: 'easeInOut' }}
-              >
-                <ChevronDown className="size-3.5" />
-              </motion.div>
-            </span>
-            <div className="flex-1 h-px bg-border/40 group-hover:bg-border/70 transition-colors" />
-          </button>
-
-          {/* Expandable content */}
-          <AnimatePresence>
-            {recentOpen && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: 'auto', opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                transition={{ duration: 0.4, ease: [0.25, 0.1, 0.25, 1] }}
-                className="w-full overflow-hidden"
-              >
-                <div className="pt-8 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-5 gap-y-8">
-                  {classrooms.map((classroom, i) => (
-                    <motion.div
-                      key={classroom.id}
-                      initial={{ opacity: 0, y: 16 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{
-                        delay: i * 0.04,
-                        duration: 0.35,
-                        ease: 'easeOut',
-                      }}
-                    >
-                      <ClassroomCard
-                        classroom={classroom}
-                        slide={thumbnails[classroom.id]}
-                        formatDate={formatDate}
-                        onDelete={handleDelete}
-                        confirmingDelete={pendingDeleteId === classroom.id}
-                        onConfirmDelete={() => confirmDelete(classroom.id)}
-                        onCancelDelete={() => setPendingDeleteId(null)}
-                        onClick={() => router.push(`/classroom/${classroom.id}`)}
-                      />
-                    </motion.div>
-                  ))}
+      {/* ═══ Learning + Books sections ═══ */}
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.5 }}
+        className="relative z-10 mt-10 w-full max-w-6xl space-y-10"
+      >
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-xl font-bold text-foreground/95 md:text-2xl">
+              最近学习
+              <span className="text-sm text-muted-foreground">{classrooms.length}</span>
+            </div>
+            <Link href="/courses" className="text-sm text-violet-600 hover:text-violet-500">
+              查看更多
+            </Link>
+          </div>
+          <div className="overflow-x-auto scrollbar-hide pb-1">
+            <div className="flex gap-4 min-w-max">
+              {classrooms.slice(0, 10).map((classroom) => (
+                <div key={classroom.id} className="w-[78vw] max-w-[280px] sm:w-[280px]">
+                  <ClassroomCard
+                    classroom={classroom}
+                    slide={thumbnails[classroom.id]}
+                    formatDate={formatDate}
+                    onDelete={handleDelete}
+                    confirmingDelete={pendingDeleteId === classroom.id}
+                    onConfirmDelete={() => confirmDelete(classroom.id)}
+                    onCancelDelete={() => setPendingDeleteId(null)}
+                    onClick={() => router.push(`/classroom/${classroom.id}`)}
+                  />
                 </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </motion.div>
-      )}
+              ))}
+            </div>
+          </div>
+        </section>
 
-      {/* Footer — flows with content, at the very end */}
-      <div className="mt-auto pt-12 pb-4 text-center text-xs text-muted-foreground/40">
-        OpenMAIC Open Source Project
-      </div>
+        <section className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-xl font-bold text-foreground/95 md:text-2xl">已购图书</h3>
+          </div>
+          <BookShelfGrid />
+        </section>
+
+        <section className="space-y-3">
+          <h3 className="text-xl font-bold text-foreground/95 md:text-2xl">推荐榜单</h3>
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <a
+              href="https://weread.qq.com/web/reader/7c632ef05a49197c62b53f0kc7e326d0257c7e1249ff682"
+              target="_blank"
+              rel="noreferrer"
+              className="group overflow-hidden rounded-2xl border border-border bg-background/80 p-3 transition-all duration-300 hover:-translate-y-0.5 hover:border-violet-400/50 hover:shadow-lg hover:shadow-violet-500/10"
+            >
+              <img
+                src="/images/rank-100-top.jpg"
+                alt="100天新书榜"
+                className="w-full rounded-xl object-contain transition-transform duration-300 group-hover:scale-[1.01]"
+                loading="lazy"
+              />
+            </a>
+            <a
+              href="https://weread.qq.com/web/reader/d8f32830813ab9b7fg01549bk6ea321b021d6ea9ab1ba605"
+              target="_blank"
+              rel="noreferrer"
+              className="group overflow-hidden rounded-2xl border border-border bg-background/80 p-3 transition-all duration-300 hover:-translate-y-0.5 hover:border-violet-400/50 hover:shadow-lg hover:shadow-violet-500/10"
+            >
+              <img
+                src="/images/rank-shenzuo.jpg"
+                alt="神作榜"
+                className="w-full rounded-xl object-contain transition-transform duration-300 group-hover:scale-[1.01]"
+                loading="lazy"
+              />
+            </a>
+          </div>
+        </section>
+      </motion.div>
+
     </div>
   );
 }
@@ -1127,6 +1141,121 @@ function ClassroomCard({
           </TooltipContent>
         </Tooltip>
       </div>
+    </div>
+  );
+}
+
+interface RecommendedBook {
+  id: string;
+  cover: string;
+  href: string;
+}
+
+const RECOMMENDED_BOOKS: RecommendedBook[] = [
+  {
+    id: 'rec-1',
+    cover: '/images/1.png',
+    href: 'https://weread.qq.com/web/reader/df332000813ab7ba6g013fc6k72b327f023972b32a1f7e2d',
+  },
+  {
+    id: 'rec-2',
+    cover: '/images/2.png',
+    href: 'https://weread.qq.com/web/reader/ea132f80564f45ea12f36fckecc32f3013eccbc87e4b62e',
+  },
+  {
+    id: 'rec-3',
+    cover: '/images/3.png',
+    href: 'https://weread.qq.com/web/reader/0ef32320543c290efcb91aak33e3289021c33e75ff09694',
+  },
+  {
+    id: 'rec-4',
+    cover: '/images/4.png',
+    href: 'https://weread.qq.com/web/reader/54232f105d149b5421c6006kb5332110237b53b3a3d68d2',
+  },
+  {
+    id: 'rec-5',
+    cover: '/images/5.png',
+    href: 'https://weread.qq.com/web/reader/1fe322b0813ab8132g011354kecc32f3013eccbc87e4b62e',
+  },
+  {
+    id: 'rec-6',
+    cover: '/images/6.png',
+    href: 'https://weread.qq.com/web/reader/56d325907203e8a856def7fk9a132c802349a1158154a83',
+  },
+  {
+    id: 'rec-7',
+    cover: '/images/7.png',
+    href: 'https://weread.qq.com/web/reader/ad432ac0813ab6f1cg01995bkecc32f3013eccbc87e4b62e',
+  },
+  {
+    id: 'rec-8',
+    cover: '/images/8.png',
+    href: 'https://weread.qq.com/web/reader/62232b3059b398622aae683k182326e0221182be0c5ca23',
+  },
+];
+
+function BookShelfGrid() {
+  const [activeBookId, setActiveBookId] = useState<string | null>(null);
+
+  return (
+    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+      {RECOMMENDED_BOOKS.map((book) => {
+        const active = activeBookId === book.id;
+
+        return (
+          <div
+            key={book.id}
+            className="group relative overflow-hidden rounded-2xl border border-border/60 bg-background/80 p-3 transition-all duration-300 hover:-translate-y-0.5 hover:border-violet-400/50 hover:shadow-lg hover:shadow-violet-500/10"
+          >
+            <button type="button" onClick={() => setActiveBookId(book.id)} className="block w-full">
+              <img
+                src={book.cover}
+                alt="图书封面"
+                className="aspect-[3/4] w-full rounded-xl object-contain transition-transform duration-300 group-hover:scale-[1.02]"
+                loading="lazy"
+              />
+            </button>
+
+            {active && (
+              <div
+                className="absolute inset-3 z-20 flex flex-col justify-center gap-3 rounded-xl bg-black/55 px-3 backdrop-blur-[2px]"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  onClick={() => setActiveBookId(null)}
+                  aria-label="关闭"
+                  className="absolute left-2 top-2 inline-flex size-7 items-center justify-center rounded-full bg-black/35 text-white/90 transition hover:bg-black/55"
+                >
+                  <X className="size-4" />
+                </button>
+
+                <button
+                  type="button"
+                  autoFocus
+                  onClick={() => {
+                    setActiveBookId(null);
+                    window.location.href = '/courses';
+                  }}
+                  className="w-full rounded-xl border border-violet-300/50 bg-violet-500/90 px-4 py-3 text-sm font-semibold text-white transition hover:bg-violet-500"
+                >
+                  配套课程
+                </button>
+
+                <a
+                  href={book.href}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={() => setActiveBookId(null)}
+                  className="block w-full rounded-xl border border-white/30 bg-white/95 px-4 py-3 text-center text-sm font-semibold text-slate-900 transition hover:bg-white"
+                >
+                  看电子书
+                </a>
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

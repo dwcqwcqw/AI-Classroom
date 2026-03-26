@@ -45,6 +45,8 @@ export interface ChatAreaRef {
   getLectureMessageId: (sessionId: string) => string | null;
   pauseBuffer: (sessionId: string) => void;
   resumeBuffer: (sessionId: string) => void;
+  pauseActiveBuffer: () => void;
+  resumeActiveBuffer: () => void;
   switchToTab: (tab: 'lecture' | 'chat') => void;
 }
 
@@ -91,6 +93,8 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       getLectureMessageId,
       pauseBuffer,
       resumeBuffer,
+      pauseActiveBuffer,
+      resumeActiveBuffer,
     } = useChatSessions({
       onLiveSpeech,
       onSpeechProgress,
@@ -180,6 +184,8 @@ export const ChatArea = forwardRef<ChatAreaRef, ChatAreaProps>(
       getLectureMessageId,
       pauseBuffer,
       resumeBuffer,
+      pauseActiveBuffer,
+      resumeActiveBuffer,
       switchToTab,
     }));
 

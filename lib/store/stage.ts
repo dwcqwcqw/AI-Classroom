@@ -3,6 +3,15 @@ import type { Stage, Scene, StageMode } from '@/lib/types/stage';
 import { createSelectors } from '@/lib/utils/create-selectors';
 import type { ChatSession } from '@/lib/types/chat';
 import type { SceneOutline } from '@/lib/types/generation';
+
+export type FailedPhase = 'content' | 'actions' | 'tts' | 'unknown';
+
+export interface FailedOutlineInfo {
+  outline: SceneOutline;
+  phase: FailedPhase;
+  reason: string;
+  failedAt: number;
+}
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('StageStore');
@@ -63,7 +72,7 @@ interface StageState {
   generationEpoch: number;
   generationStatus: 'idle' | 'generating' | 'paused' | 'completed' | 'error';
   currentGeneratingOrder: number;
-  failedOutlines: SceneOutline[];
+  failedOutlines: FailedOutlineInfo[];
 
   // Actions
   setStage: (stage: Stage) => void;
@@ -80,7 +89,7 @@ interface StageState {
   setGenerationStatus: (status: 'idle' | 'generating' | 'paused' | 'completed' | 'error') => void;
   setCurrentGeneratingOrder: (order: number) => void;
   bumpGenerationEpoch: () => void;
-  addFailedOutline: (outline: SceneOutline) => void;
+  addFailedOutline: (outline: SceneOutline, phase?: FailedPhase, reason?: string) => void;
   clearFailedOutlines: () => void;
   retryFailedOutline: (outlineId: string) => void;
 
@@ -217,17 +226,41 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
 
   bumpGenerationEpoch: () => set((s) => ({ generationEpoch: s.generationEpoch + 1 })),
 
-  addFailedOutline: (outline) => {
-    const existed = get().failedOutlines.some((o) => o.id === outline.id);
-    if (existed) return;
-    set({ failedOutlines: [...get().failedOutlines, outline] });
+  addFailedOutline: (outline, phase = 'unknown', reason = '') => {
+    const existed = get().failedOutlines.some((o) => o.outline.id === outline.id);
+    if (existed) {
+      set({
+        failedOutlines: get().failedOutlines.map((o) =>
+          o.outline.id === outline.id
+            ? {
+                ...o,
+                phase,
+                reason: reason || o.reason,
+                failedAt: Date.now(),
+              }
+            : o,
+        ),
+      });
+      return;
+    }
+    set({
+      failedOutlines: [
+        ...get().failedOutlines,
+        {
+          outline,
+          phase,
+          reason,
+          failedAt: Date.now(),
+        },
+      ],
+    });
   },
 
   clearFailedOutlines: () => set({ failedOutlines: [] }),
 
   retryFailedOutline: (outlineId) => {
     set({
-      failedOutlines: get().failedOutlines.filter((o) => o.id !== outlineId),
+      failedOutlines: get().failedOutlines.filter((o) => o.outline.id !== outlineId),
     });
   },
 

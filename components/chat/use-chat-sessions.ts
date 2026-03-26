@@ -1401,6 +1401,28 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     if (buf) buf.resume();
   }, []);
 
+  /** Pause the buffer for the currently active QA/discussion session. */
+  const pauseActiveBuffer = useCallback(() => {
+    const active = sessionsRef.current.find(
+      (s) => (s.type === 'qa' || s.type === 'discussion') && s.status === 'active',
+    );
+    if (active) {
+      const buf = buffersRef.current.get(active.id);
+      if (buf) buf.pause();
+    }
+  }, []);
+
+  /** Resume the buffer for the currently active QA/discussion session. */
+  const resumeActiveBuffer = useCallback(() => {
+    const active = sessionsRef.current.find(
+      (s) => (s.type === 'qa' || s.type === 'discussion') && s.status === 'active',
+    );
+    if (active) {
+      const buf = buffersRef.current.get(active.id);
+      if (buf) buf.resume();
+    }
+  }, []);
+
   return {
     sessions,
     activeSessionId,
@@ -1421,5 +1443,7 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
     getLectureMessageId,
     pauseBuffer,
     resumeBuffer,
+    pauseActiveBuffer,
+    resumeActiveBuffer,
   };
 }

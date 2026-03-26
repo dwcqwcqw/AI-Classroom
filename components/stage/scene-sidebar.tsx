@@ -41,6 +41,13 @@ export function SceneSidebar({
   const { scenes, currentSceneId, setCurrentSceneId, generatingOutlines, generationStatus } =
     useStageStore();
   const failedOutlines = useStageStore.use.failedOutlines();
+
+  const phaseLabelMap: Record<string, string> = {
+    content: '内容',
+    actions: '动作',
+    tts: '语音',
+    unknown: '未知',
+  };
   const viewportSize = useCanvasStore.use.viewportSize();
   const viewportRatio = useCanvasStore.use.viewportRatio();
 
@@ -126,7 +133,7 @@ export function SceneSidebar({
             className="flex items-center gap-2 cursor-pointer rounded-lg px-1.5 -mx-1.5 py-1 -my-1 hover:bg-gray-100/80 dark:hover:bg-gray-800/60 active:scale-[0.97] transition-all duration-150"
             title={t('generation.backToHome')}
           >
-            <img src="/logo-horizontal.png" alt="OpenMAIC" className="h-6" />
+            <img src="/logo-black.svg" alt="OpenMAIC" className="h-6" />
           </button>
           <button
             onClick={() => onCollapseChange(true)}
@@ -322,7 +329,8 @@ export function SceneSidebar({
           {generatingOutlines.length > 0 &&
             (() => {
               const outline = generatingOutlines[0];
-              const isFailed = failedOutlines.some((f) => f.id === outline.id);
+              const failedInfo = failedOutlines.find((f) => f.outline.id === outline.id);
+              const isFailed = !!failedInfo;
               const isRetrying = retryingOutlineId === outline.id;
               const isPaused = generationStatus === 'paused';
               const isActive = currentSceneId === PENDING_SCENE_ID;
@@ -388,29 +396,41 @@ export function SceneSidebar({
                   >
                     <div className="absolute inset-0 flex flex-col items-center justify-center gap-1.5">
                       {isFailed ? (
-                        <div className="flex items-center gap-1 text-xs font-medium text-red-500/90 dark:text-red-400">
-                          {onRetryOutline ? (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleRetryOutline(outline.id);
-                              }}
-                              disabled={isRetrying}
-                              className="p-1 -ml-1 rounded-md hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors active:scale-95 disabled:opacity-50 disabled:active:scale-100"
-                              title={t('generation.retryScene')}
-                            >
-                              <RefreshCw
-                                className={cn('w-3.5 h-3.5', isRetrying && 'animate-spin')}
-                              />
-                            </button>
-                          ) : (
-                            <AlertCircle className="w-3.5 h-3.5" />
+                        <div className="w-[92%] space-y-1 text-xs font-medium text-red-500/90 dark:text-red-400">
+                          <div className="flex items-center gap-1">
+                            {onRetryOutline ? (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRetryOutline(outline.id);
+                                }}
+                                disabled={isRetrying}
+                                className="p-1 -ml-1 rounded-md hover:bg-red-100 dark:hover:bg-red-900/40 transition-colors active:scale-95 disabled:opacity-50 disabled:active:scale-100"
+                                title={t('generation.retryScene')}
+                              >
+                                <RefreshCw
+                                  className={cn('w-3.5 h-3.5', isRetrying && 'animate-spin')}
+                                />
+                              </button>
+                            ) : (
+                              <AlertCircle className="w-3.5 h-3.5" />
+                            )}
+                            <span>
+                              {isRetrying
+                                ? t('generation.retryingScene')
+                                : t('stage.generationFailed')}
+                            </span>
+                          </div>
+                          {failedInfo && (
+                            <>
+                              <div className="text-[10px] text-red-600/90 dark:text-red-300/90">
+                                阶段：{phaseLabelMap[failedInfo.phase] || phaseLabelMap.unknown}
+                              </div>
+                              <div className="text-[10px] leading-tight text-red-600/80 dark:text-red-300/80 line-clamp-2 break-all">
+                                原因：{failedInfo.reason || '未返回详细错误'}
+                              </div>
+                            </>
                           )}
-                          <span>
-                            {isRetrying
-                              ? t('generation.retryingScene')
-                              : t('stage.generationFailed')}
-                          </span>
                         </div>
                       ) : (
                         <>
