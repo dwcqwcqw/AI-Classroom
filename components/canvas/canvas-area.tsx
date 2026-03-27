@@ -2,7 +2,7 @@
 
 import { useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Play } from 'lucide-react';
+import { Maximize, Play } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { SceneRenderer } from '@/components/stage/scene-renderer';
 import { SceneProvider } from '@/lib/contexts/scene-context';
@@ -43,6 +43,7 @@ export function CanvasArea({
   isPendingScene,
   isGenerationFailed,
   onRetryGeneration,
+  onToggleFullscreen,
 }: CanvasAreaProps) {
   const { t } = useI18n();
   const showControls = mode === 'playback' && !whiteboardOpen;
@@ -222,6 +223,24 @@ export function CanvasArea({
               </motion.div>
             )}
           </AnimatePresence>
+          {onToggleFullscreen && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleFullscreen();
+              }}
+              className={cn(
+                'absolute top-3 right-3 z-[108] w-9 h-9 rounded-full',
+                'bg-black/45 hover:bg-black/60 text-white',
+                'backdrop-blur-sm border border-white/25',
+                'flex items-center justify-center transition-colors',
+              )}
+              aria-label="Toggle fullscreen"
+              title="Fullscreen"
+            >
+              <Maximize className="w-4 h-4" />
+            </button>
+          )}
         </div>
       </div>
 
@@ -246,6 +265,7 @@ export function CanvasArea({
           onNextSlide={onNextSlide}
           onPlayPause={onPlayPause}
           onWhiteboardClose={onWhiteboardClose}
+          onToggleFullscreen={onToggleFullscreen}
           showStopDiscussion={showStopDiscussion}
           onStopDiscussion={onStopDiscussion}
         />

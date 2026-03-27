@@ -94,6 +94,7 @@ export function Stage({
 
   // Scene switch confirmation dialog state
   const [pendingSceneId, setPendingSceneId] = useState<string | null>(null);
+  const mobileLayoutInitializedRef = useRef(false);
 
   // Whiteboard state (from canvas store so AI tools can open it)
   const whiteboardOpen = useCanvasStore.use.whiteboardOpen();
@@ -440,6 +441,18 @@ export function Stage({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- Only re-run when scene changes, functions are stable refs
   }, [currentScene]);
 
+  // Mobile-first playback layout: default collapse sidebar + chat on phones/tablets.
+  useEffect(() => {
+    if (mobileLayoutInitializedRef.current) return;
+    if (typeof window === 'undefined') return;
+    const isMobile = window.matchMedia('(max-width: 1024px)').matches;
+    if (isMobile) {
+      setSidebarCollapsed(true);
+      setChatAreaCollapsed(true);
+    }
+    mobileLayoutInitializedRef.current = true;
+  }, [setSidebarCollapsed, setChatAreaCollapsed]);
+
   // Cleanup on unmount
   useEffect(() => {
     const audioPlayer = audioPlayerRef.current;
@@ -657,6 +670,27 @@ export function Stage({
     setWhiteboardOpen(!whiteboardOpen);
   };
 
+  const handleToggleFullscreen = useCallback(async () => {
+    try {
+      if (typeof document === 'undefined') return;
+      const root = document.documentElement;
+      if (!document.fullscreenElement) {
+        await root.requestFullscreen();
+        const maybeScreen = screen as Screen & {
+          orientation?: { lock?: (orientation: string) => Promise<void> };
+        };
+        if (window.matchMedia('(max-width: 1024px)').matches) {
+          await maybeScreen.orientation?.lock?.('landscape').catch(() => undefined);
+        }
+      } else {
+        await document.exitFullscreen();
+      }
+    } catch (e) {
+      // no-op: fullscreen can be blocked by browser policy
+      console.warn('Toggle fullscreen failed:', e);
+    }
+  }, []);
+
   // Map engine mode to the CanvasArea's expected engine state
   const canvasEngineState = (() => {
     switch (engineMode) {
@@ -746,6 +780,7 @@ export function Stage({
                 ? () => onRetryOutline(generatingOutlines[0].id)
                 : undefined
             }
+            onToggleFullscreen={handleToggleFullscreen}
           />
         </div>
 
