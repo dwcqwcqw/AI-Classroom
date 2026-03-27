@@ -123,17 +123,13 @@ async function directorNode(
   if (isSingleAgent) {
     const agentId = state.availableAgentIds[0] || 'default-1';
 
-    if (state.turnCount === 0) {
-      // First turn: dispatch the agent
-      log.info(`[Director] Single agent: dispatching "${agentId}"`);
-      write({ type: 'thinking', data: { stage: 'agent_loading', agentId } });
-      return { currentAgentId: agentId, shouldEnd: false };
-    }
-
-    // Agent already responded: cue user for follow-up
-    log.info(`[Director] Single agent: cueing user after "${agentId}"`);
-    write({ type: 'cue_user', data: { fromAgentId: agentId } });
-    return { shouldEnd: true };
+    // Dispatch the single agent every turn until the turn-limit guard above stops the loop.
+    // This allows frontend maxTurns to control how many rounds the AI answers per user input.
+    log.info(
+      `[Director] Single agent: dispatching "${agentId}" (turn ${state.turnCount + 1}/${state.maxTurns})`,
+    );
+    write({ type: 'thinking', data: { stage: 'agent_loading', agentId } });
+    return { currentAgentId: agentId, shouldEnd: false };
   }
 
   // ── Multi agent: fast-path for first turn with trigger ──
