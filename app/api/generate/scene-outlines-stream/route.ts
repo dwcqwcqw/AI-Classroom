@@ -12,7 +12,8 @@
  */
 
 import { NextRequest } from 'next/server';
-import { streamLLM } from '@/lib/ai/llm';
+import { callLLM, streamLLM } from '@/lib/ai/llm';
+import { parseModelString } from '@/lib/ai/providers';
 import { buildPrompt, PROMPT_IDS } from '@/lib/generation/prompts';
 import {
   formatImageDescription,
@@ -244,8 +245,11 @@ export async function POST(req: NextRequest) {
 
           let parsedOutlines: SceneOutline[] = [];
           let lastError: string | undefined;
+          let lastAttempt = 0;
+          let lastResponseLength = 0;
 
           for (let attempt = 1; attempt <= MAX_STREAM_RETRIES + 1; attempt++) {
+            lastAttempt = attempt;
             try {
               const result = streamLLM(streamParams, 'scene-outlines-stream');
 
@@ -275,8 +279,54 @@ export async function POST(req: NextRequest) {
                 }
               }
 
+              lastResponseLength = fullText.length;
+
               // Validate: got outlines?
               if (parsedOutlines.length > 0) break;
+
+              // Fallback path for providers that return empty/unstable stream:
+              // do one non-stream call and parse complete text.
+              if (!fullText.trim()) {
+                try {
+                  const nonStream = await callLLM(
+                    {
+                      model: languageModel,
+                      ...(visionImages?.length && hasVision
+                        ? {
+                            system: prompts.system,
+                            messages: [
+                              {
+                                role: 'user' as const,
+                                content: buildVisionUserContent(prompts.user, visionImages),
+                              },
+                            ],
+                          }
+                        : {
+                            system: prompts.system,
+                            prompt: prompts.user,
+                          }),
+                      maxOutputTokens: modelInfo?.outputWindow,
+                    },
+                    'scene-outlines-fallback',
+                    { retries: 1 },
+                  );
+
+                  if (nonStream.text?.trim()) {
+                    lastResponseLength = nonStream.text.length;
+                    const recovered = extractNewOutlines(nonStream.text, 0);
+                    if (recovered.length > 0) {
+                      parsedOutlines = recovered.map((outline, index) => ({
+                        ...outline,
+                        id: outline.id || nanoid(),
+                        order: index + 1,
+                      }));
+                      break;
+                    }
+                  }
+                } catch (fallbackError) {
+                  log.warn('Non-stream fallback failed:', fallbackError);
+                }
+              }
 
               // Empty result — retry if we have attempts left
               lastError = fullText.trim()
@@ -287,7 +337,6 @@ export async function POST(req: NextRequest) {
                 log.warn(
                   `Empty outlines (attempt ${attempt}/${MAX_STREAM_RETRIES + 1}), retrying...`,
                 );
-                // Notify client a retry is happening
                 const retryEvent = JSON.stringify({
                   type: 'retry',
                   attempt,
@@ -325,12 +374,23 @@ export async function POST(req: NextRequest) {
             controller.enqueue(encoder.encode(`data: ${doneEvent}\n\n`));
           } else {
             // All retries exhausted, no outlines produced
+            const { providerId, modelId } = parseModelString(modelString);
+            const errorDetails = {
+              provider: providerId,
+              model: modelId,
+              attempt: lastAttempt,
+              responseLength: lastResponseLength,
+            };
+
             log.error(
               `Outline generation failed after ${MAX_STREAM_RETRIES + 1} attempts: ${lastError}`,
+              errorDetails,
             );
+
             const errorEvent = JSON.stringify({
               type: 'error',
               error: lastError || 'Failed to generate outlines',
+              details: errorDetails,
             });
             controller.enqueue(encoder.encode(`data: ${errorEvent}\n\n`));
           }
