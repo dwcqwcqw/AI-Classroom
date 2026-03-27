@@ -55,6 +55,7 @@ const OrchestratorState = Annotation.Root({
   languageModel: Annotation<LanguageModel>,
   thinkingConfig: Annotation<ThinkingConfig | null>,
   discussionContext: Annotation<{ topic: string; prompt?: string } | null>,
+  sessionType: Annotation<string | null>,
   triggerAgentId: Annotation<string | null>,
   userProfile: Annotation<{ nickname?: string; bio?: string } | null>,
   /** Request-scoped agent configs for generated agents (not in the default registry) */
@@ -123,8 +124,14 @@ async function directorNode(
   if (isSingleAgent) {
     const agentId = state.availableAgentIds[0] || 'default-1';
 
-    // Dispatch the single agent every turn until the turn-limit guard above stops the loop.
-    // This allows frontend maxTurns to control how many rounds the AI answers per user input.
+    // For QA: one answer turn, then cue user to continue the interaction.
+    if (state.sessionType === 'qa' && state.turnCount > 0) {
+      log.info(`[Director] Single agent QA: cueing user after "${agentId}"`);
+      write({ type: 'cue_user', data: { fromAgentId: agentId } });
+      return { shouldEnd: true };
+    }
+
+    // For discussion: keep dispatching until frontend maxTurns guard stops loop.
     log.info(
       `[Director] Single agent: dispatching "${agentId}" (turn ${state.turnCount + 1}/${state.maxTurns})`,
     );
@@ -284,6 +291,7 @@ async function runAgentGeneration(
     state.whiteboardLedger,
     state.userProfile || undefined,
     state.agentResponses,
+    state.sessionType,
   );
   const openaiMessages = convertMessagesToOpenAI(state.messages, agentId);
   const adapter = new AISdkLangGraphAdapter(state.languageModel, state.thinkingConfig ?? undefined);
@@ -532,6 +540,7 @@ export function buildInitialState(
     languageModel,
     thinkingConfig: thinkingConfig ?? null,
     discussionContext,
+    sessionType: request.config.sessionType ?? null,
     triggerAgentId: request.config.triggerAgentId || null,
     userProfile: request.userProfile || null,
     agentConfigOverrides,

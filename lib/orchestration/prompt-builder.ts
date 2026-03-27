@@ -97,6 +97,7 @@ export function buildStructuredPrompt(
   whiteboardLedger?: WhiteboardActionRecord[],
   userProfile?: { nickname?: string; bio?: string },
   agentResponses?: AgentTurnSummary[],
+  sessionType?: string | null,
 ): string {
   // Determine current scene type for action filtering
   const currentScene = storeState.currentSceneId
@@ -162,6 +163,10 @@ Personalize your teaching based on their background when relevant. Address them 
     : '';
 
   const roleGuideline = ROLE_GUIDELINES[agentConfig.role] || ROLE_GUIDELINES.student;
+  const qaWhiteboardNudge =
+    sessionType === 'qa'
+      ? `\n# Q&A Whiteboard Policy (CRITICAL)\nWhen the user asks for explanation, derivation, comparison, calculation, or "show me" style help, you SHOULD use whiteboard actions to demonstrate step-by-step (open if needed, draw concise content, keep it readable). Do not only answer verbally when a visual explanation would help understanding.\n`
+      : '';
 
   // Build language constraint from stage language
   const courseLanguage = storeState.stage?.language;
@@ -177,7 +182,7 @@ ${agentConfig.persona}
 
 ## Your Classroom Role
 ${roleGuideline}
-${studentProfileSection}${peerContext}${languageConstraint}
+${studentProfileSection}${peerContext}${languageConstraint}${qaWhiteboardNudge}
 # Output Format
 You MUST output a JSON array for ALL responses. Each element is an object with a \`type\` field:
 

@@ -19,6 +19,7 @@ interface CanvasAreaProps extends CanvasToolbarProps {
   readonly isPendingScene?: boolean;
   readonly isGenerationFailed?: boolean;
   readonly onRetryGeneration?: () => void;
+  readonly onToggleFullscreen?: () => void;
 }
 
 export function CanvasArea({
