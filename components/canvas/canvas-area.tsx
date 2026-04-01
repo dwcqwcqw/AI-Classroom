@@ -2,7 +2,7 @@
 
 import { useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Maximize, Play } from 'lucide-react';
+import { Maximize2, Play } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { SceneRenderer } from '@/components/stage/scene-renderer';
 import { SceneProvider } from '@/lib/contexts/scene-context';
@@ -241,7 +241,7 @@ export function CanvasArea({
               aria-label="Toggle fullscreen"
               title="Fullscreen"
             >
-              <Maximize className="w-4 h-4" />
+              <Maximize2 className="w-4 h-4" />
             </button>
           )}
         </div>

@@ -13,7 +13,7 @@ import { Roundtable } from '@/components/roundtable';
 import { PlaybackEngine, computePlaybackView } from '@/lib/playback';
 import type { EngineMode, TriggerEvent, Effect } from '@/lib/playback';
 import { ActionEngine } from '@/lib/action/engine';
-import { createAudioPlayer } from '@/lib/utils/audio-player';
+import { createAudioPlayer, unlockMobileAudio } from '@/lib/utils/audio-player';
 import { useDiscussionTTS } from '@/lib/hooks/use-discussion-tts';
 import type { AudioIndicatorState } from '@/components/roundtable/audio-indicator';
 import type { Action, DiscussionAction, SpeechAction } from '@/lib/types/action';
@@ -103,6 +103,8 @@ export function Stage({
   const [isPresenting, setIsPresenting] = useState(false);
   const [controlsVisible, setControlsVisible] = useState(true);
   const [isPresentationInteractionActive, setIsPresentationInteractionActive] = useState(false);
+  // Force re-render on orientation/resize so sceneViewerHeight recalculates
+  const [, setViewportSize] = useState(0);
 
   // Whiteboard state (from canvas store so AI tools can open it)
   const whiteboardOpen = useCanvasStore.use.whiteboardOpen();
@@ -289,38 +291,60 @@ export function Stage({
     const stageElement = stageRef.current;
     if (!stageElement) return;
 
-    try {
-      if (document.fullscreenElement === stageElement) {
-        // Unlock Escape key before exiting fullscreen
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (navigator as any).keyboard?.unlock?.();
-        await document.exitFullscreen();
-        return;
-      }
+    const isMobile =
+      typeof window !== 'undefined' && window.matchMedia('(max-width: 1024px)').matches;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const nav = navigator as any;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const scr = screen as any;
 
+    if (document.fullscreenElement) {
+      // --- Exit fullscreen ---
+      nav.keyboard?.unlock?.();
+      await document.exitFullscreen().catch(() => {});
+      // Unlock orientation on mobile
+      if (isMobile) {
+        scr.orientation?.unlock?.();
+      }
+      return;
+    }
+
+    // --- Enter fullscreen ---
+    try {
       setControlsVisible(true);
-      await stageElement.requestFullscreen();
-      // Lock Escape key so it doesn't auto-exit fullscreen (#255)
-      // Escape is handled manually in our keydown handler instead
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      await (navigator as any).keyboard?.lock?.(['Escape']).catch(() => {});
+      // On mobile, some browsers only allow fullscreen on documentElement
+      const fsTarget =
+        isMobile && !stageElement.requestFullscreen
+          ? document.documentElement
+          : stageElement;
+      await fsTarget.requestFullscreen();
+      // Lock Escape key so it doesn't auto-exit fullscreen
+      await nav.keyboard?.lock?.(['Escape']).catch(() => {});
+      // Lock orientation to landscape on mobile
+      if (isMobile) {
+        await scr.orientation?.lock?.('landscape').catch(() => {});
+      }
       setSidebarCollapsed(true);
       setChatAreaCollapsed(true);
     } catch {
-      // Firefox may deny fullscreen from certain keyboard events (e.g. F11)
       console.warn('[Presentation] Fullscreen request denied — browser policy');
     }
   }, [setChatAreaCollapsed, setSidebarCollapsed]);
 
   useEffect(() => {
     const onFullscreenChange = () => {
-      const active = document.fullscreenElement === stageRef.current;
+      // On mobile we may fullscreen documentElement; treat any fullscreen active state as presenting
+      const active =
+        document.fullscreenElement !== null &&
+        (document.fullscreenElement === stageRef.current ||
+          document.fullscreenElement === document.documentElement);
       setIsPresenting(active);
 
       if (!active) {
-        // Ensure keyboard unlock on any fullscreen exit
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (navigator as any).keyboard?.unlock?.();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (screen as any).orientation?.unlock?.();
         setControlsVisible(true);
         clearPresentationIdleTimer();
       }
@@ -599,6 +623,17 @@ export function Stage({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- unmount-only cleanup, clearPresentationIdleTimer is stable
   }, []);
 
+  // Recalculate layout on orientation/resize (mobile landscape ↔ portrait)
+  useEffect(() => {
+    const handleResize = () => setViewportSize((v) => v + 1);
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', handleResize);
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      window.removeEventListener('orientationchange', handleResize);
+    };
+  }, []);
+
   // Sync mute state from settings store to audioPlayer
   useEffect(() => {
     audioPlayerRef.current.setMuted(ttsMuted);
@@ -723,6 +758,8 @@ export function Stage({
 
   // play/pause toggle
   const handlePlayPause = useCallback(async () => {
+    // Unlock audio on mobile browsers synchronously within the user-gesture handler
+    unlockMobileAudio();
     const engine = engineRef.current;
     if (!engine) return;
 
@@ -802,25 +839,8 @@ export function Stage({
     setWhiteboardOpen(!whiteboardOpen);
   };
 
-  const handleToggleFullscreen = useCallback(async () => {
-    try {
-      if (typeof document === 'undefined') return;
-      const root = document.documentElement;
-      if (!document.fullscreenElement) {
-        await root.requestFullscreen();
-        const maybeScreen = screen as Screen & {
-          orientation?: { lock?: (orientation: string) => Promise<void> };
-        };
-        if (window.matchMedia('(max-width: 1024px)').matches) {
-          await maybeScreen.orientation?.lock?.('landscape').catch(() => undefined);
-        }
-      } else {
-        await document.exitFullscreen();
-      }
-    } catch (e) {
-      console.warn('Toggle fullscreen failed:', e);
-    }
-  }, []);
+  // handleToggleFullscreen delegates to togglePresentation for unified behavior
+  const handleToggleFullscreen = togglePresentation;
 
   const isPresentationShortcutTarget = useCallback((target: EventTarget | null) => {
     if (!(target instanceof HTMLElement)) return false;
@@ -956,10 +976,15 @@ export function Stage({
       }
     : null;
 
-  // Calculate scene viewer height (subtract Header's 80px height)
+  // Calculate scene viewer height dynamically based on breakpoint
+  // Header: h-14 (56px) on mobile, h-20 (80px) on sm+
+  // Roundtable: smaller on mobile
   const sceneViewerHeight = (() => {
-    const headerHeight = isPresenting ? 0 : 80; // Header h-20 = 80px
-    const roundtableHeight = mode === 'playback' && !isPresenting ? 192 : 0;
+    if (isPresenting) return '100%';
+    const isMobileLayout =
+      typeof window !== 'undefined' && window.matchMedia('(max-width: 639px)').matches;
+    const headerHeight = isMobileLayout ? 56 : 80;
+    const roundtableHeight = mode === 'playback' ? (isMobileLayout ? 160 : 192) : 0;
     return `calc(100% - ${headerHeight + roundtableHeight}px)`;
   })();
 

@@ -203,3 +203,26 @@ export class AudioPlayer {
 export function createAudioPlayer(): AudioPlayer {
   return new AudioPlayer();
 }
+
+/**
+ * Unlock audio playback on mobile browsers (iOS/Android).
+ *
+ * Mobile browsers block audio until a direct user gesture triggers playback.
+ * Call this synchronously inside a touch/click handler before any async work
+ * so the browser grants audio permission for subsequent plays in the same task.
+ */
+export function unlockMobileAudio(): void {
+  if (typeof window === 'undefined') return;
+
+  // Play a zero-duration silent audio to satisfy the user-gesture requirement
+  try {
+    const silentAudio = new Audio();
+    // Minimal silent MP3 (44 bytes, 0.001 s)
+    silentAudio.src =
+      'data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjI5LjEwMAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAABAAADQgD///////////////////////////////////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//MUZAAAAAGkAAAAAAAAA0gAAAAATEFNRTMuOTlyBmAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//MURAAAAA0gAAAAAAADSAAAAATEFNRTMuOTlyBmAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
+    silentAudio.volume = 0;
+    silentAudio.play().catch(() => {});
+  } catch {
+    // Ignore — best-effort unlock
+  }
+}
