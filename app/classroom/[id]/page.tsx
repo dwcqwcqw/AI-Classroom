@@ -6,6 +6,7 @@ import { useStageStore } from '@/lib/store';
 import { loadImageMapping } from '@/lib/utils/image-storage';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useParams } from 'next/navigation';
+import { useSettingsStore } from '@/lib/store/settings';
 import { useSceneGenerator } from '@/lib/hooks/use-scene-generator';
 import { useMediaGenerationStore } from '@/lib/store/media-generation';
 import { useWhiteboardHistoryStore } from '@/lib/store/whiteboard-history';
@@ -25,6 +26,9 @@ export default function ClassroomDetailPage() {
   const [error, setError] = useState<string | null>(null);
 
   const generationStartedRef = useRef(false);
+
+  const setSidebarCollapsed = useSettingsStore((s) => s.setSidebarCollapsed);
+  const setChatAreaCollapsed = useSettingsStore((s) => s.setChatAreaCollapsed);
 
   const { generateRemaining, retrySingleOutline, stop } = useSceneGenerator({
     onComplete: () => {
@@ -112,13 +116,19 @@ export default function ClassroomDetailPage() {
     // Clear whiteboard history to prevent snapshots from a previous course leaking in.
     useWhiteboardHistoryStore.getState().clearHistory();
 
+    // Mobile default: collapse sidebar + chat area
+    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 1024px)').matches) {
+      setSidebarCollapsed(true);
+      setChatAreaCollapsed(true);
+    }
+
     loadClassroom();
 
     // Cancel ongoing generation when classroomId changes or component unmounts
     return () => {
       stop();
     };
-  }, [classroomId, loadClassroom, stop]);
+  }, [classroomId, loadClassroom, stop, setSidebarCollapsed, setChatAreaCollapsed]);
 
   // Auto-resume generation for pending outlines
   useEffect(() => {

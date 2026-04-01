@@ -199,6 +199,7 @@ export async function generateClassroom(
         maxOutputTokens: modelInfo?.outputWindow,
       },
       'generate-classroom',
+      { retries: 2 },
     );
     return result.text;
   };

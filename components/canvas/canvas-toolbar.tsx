@@ -50,6 +50,7 @@ export interface CanvasToolbarProps {
   readonly onToggleAutoPlay?: () => void;
   readonly playbackSpeed?: number;
   readonly onCycleSpeed?: () => void;
+  readonly onToggleFullscreen?: () => void;
 }
 
 /* Compact control button */
@@ -108,6 +109,7 @@ export function CanvasToolbar({
   onToggleAutoPlay,
   playbackSpeed = 1,
   onCycleSpeed,
+  onToggleFullscreen,
 }: CanvasToolbarProps) {
   const { t } = useI18n();
   const canGoPrev = currentSceneIndex > 0;
@@ -371,6 +373,21 @@ export function CanvasToolbar({
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
+          )}
+
+          {/* Fullscreen */}
+          {onToggleFullscreen && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleFullscreen();
+              }}
+              className={cn(ctrlBtn, 'w-6 h-6 text-gray-500 dark:text-gray-400')}
+              title="Fullscreen"
+              aria-label="Toggle fullscreen"
+            >
+              <Maximize className="w-3.5 h-3.5" />
+            </button>
           )}
 
           {/* Whiteboard */}
