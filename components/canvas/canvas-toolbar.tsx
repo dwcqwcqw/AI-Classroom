@@ -386,7 +386,7 @@ export function CanvasToolbar({
               title="Fullscreen"
               aria-label="Toggle fullscreen"
             >
-              <Maximize className="w-3.5 h-3.5" />
+              <Maximize2 className="w-3.5 h-3.5" />
             </button>
           )}
 
