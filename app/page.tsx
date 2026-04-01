@@ -18,6 +18,7 @@ import {
   Monitor,
   BotOff,
   ChevronUp,
+  Clock,
   X,
 } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
@@ -38,6 +39,7 @@ import {
   StageListItem,
   listStages,
   deleteStageData,
+  renameStage,
   getFirstSlideByStages,
 } from '@/lib/utils/stage-storage';
 import { ThumbnailSlide } from '@/components/slide-renderer/components/ThumbnailSlide';
@@ -84,13 +86,11 @@ function HomePage() {
 
   // Model setup state
   const currentModelId = useSettingsStore((s) => s.modelId);
-  const [storeHydrated, setStoreHydrated] = useState(false);
   const [recentOpen, setRecentOpen] = useState(true);
 
   // Hydrate client-only state after mount (avoids SSR mismatch)
   /* eslint-disable react-hooks/set-state-in-effect -- Hydration from localStorage must happen in effect */
   useEffect(() => {
-    setStoreHydrated(true);
     try {
       const saved = localStorage.getItem(RECENT_OPEN_STORAGE_KEY);
       if (saved !== null) setRecentOpen(saved !== 'false');
@@ -126,7 +126,6 @@ function HomePage() {
     }
   }
 
-  const needsSetup = storeHydrated && !currentModelId;
   const [languageOpen, setLanguageOpen] = useState(false);
   const [themeOpen, setThemeOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -204,6 +203,16 @@ function HomePage() {
     } catch (err) {
       log.error('Failed to delete classroom:', err);
       toast.error('Failed to delete classroom');
+    }
+  };
+
+  const handleRename = async (id: string, newName: string) => {
+    try {
+      await renameStage(id, newName);
+      setClassrooms((prev) => prev.map((c) => (c.id === id ? { ...c, name: newName } : c)));
+    } catch (err) {
+      log.error('Failed to rename classroom:', err);
+      toast.error(t('classroom.renameFailed'));
     }
   };
 
@@ -459,24 +468,10 @@ function HomePage() {
         <div className="relative">
           <button
             onClick={() => setSettingsOpen(true)}
-            className={cn(
-              'p-2 rounded-full text-gray-400 dark:text-gray-500 hover:bg-white dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:shadow-sm transition-all group',
-              needsSetup && 'animate-setup-glow',
-            )}
+            className="p-2 rounded-full text-gray-400 dark:text-gray-500 hover:bg-white dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:shadow-sm transition-all group"
           >
             <Settings className="w-4 h-4 group-hover:rotate-90 transition-transform duration-500" />
           </button>
-          {needsSetup && (
-            <>
-              <span className="absolute -top-0.5 -right-0.5 flex h-3 w-3">
-                <span className="animate-setup-ping absolute inline-flex h-full w-full rounded-full bg-violet-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-violet-500" />
-              </span>
-              <span className="animate-setup-float absolute top-full mt-2 right-0 whitespace-nowrap text-[11px] font-medium text-violet-600 dark:text-violet-400 bg-violet-50 dark:bg-violet-950/40 border border-violet-200 dark:border-violet-800/50 px-2 py-0.5 rounded-full shadow-sm pointer-events-none">
-                {t('settings.setupNeeded')}
-              </span>
-            </>
-          )}
         </div>
       </div>
       <SettingsDialog
@@ -625,43 +620,91 @@ function HomePage() {
         </AnimatePresence>
       </motion.div>
 
-      {/* ═══ Learning + Books sections ═══ */}
+      {/* ═══ Recent classrooms — collapsible ═══ */}
+      {classrooms.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.5 }}
+          className="relative z-10 mt-10 w-full max-w-6xl flex flex-col items-center"
+        >
+          {/* Trigger — divider-line with centered text */}
+          <button
+            onClick={() => {
+              const next = !recentOpen;
+              setRecentOpen(next);
+              try {
+                localStorage.setItem(RECENT_OPEN_STORAGE_KEY, String(next));
+              } catch {
+                /* ignore */
+              }
+            }}
+            className="group w-full flex items-center gap-4 py-2 cursor-pointer"
+          >
+            <div className="flex-1 h-px bg-border/40 group-hover:bg-border/70 transition-colors" />
+            <span className="shrink-0 flex items-center gap-2 text-[13px] text-muted-foreground/60 group-hover:text-foreground/70 transition-colors select-none">
+              <Clock className="size-3.5" />
+              {t('classroom.recentClassrooms')}
+              <span className="text-[11px] tabular-nums opacity-60">{classrooms.length}</span>
+              <motion.div
+                animate={{ rotate: recentOpen ? 180 : 0 }}
+                transition={{ duration: 0.3, ease: 'easeInOut' }}
+              >
+                <ChevronDown className="size-3.5" />
+              </motion.div>
+            </span>
+            <div className="flex-1 h-px bg-border/40 group-hover:bg-border/70 transition-colors" />
+          </button>
+
+          {/* Expandable content */}
+          <AnimatePresence>
+            {recentOpen && (
+              <motion.div
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                exit={{ height: 0, opacity: 0 }}
+                transition={{ duration: 0.4, ease: [0.25, 0.1, 0.25, 1] }}
+                className="w-full overflow-hidden"
+              >
+                <div className="pt-8 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-5 gap-y-8">
+                  {classrooms.map((classroom, i) => (
+                    <motion.div
+                      key={classroom.id}
+                      initial={{ opacity: 0, y: 16 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{
+                        delay: i * 0.04,
+                        duration: 0.35,
+                        ease: 'easeOut',
+                      }}
+                    >
+                      <ClassroomCard
+                        classroom={classroom}
+                        slide={thumbnails[classroom.id]}
+                        formatDate={formatDate}
+                        onDelete={handleDelete}
+                        onRename={handleRename}
+                        confirmingDelete={pendingDeleteId === classroom.id}
+                        onConfirmDelete={() => confirmDelete(classroom.id)}
+                        onCancelDelete={() => setPendingDeleteId(null)}
+                        onClick={() => router.push(`/classroom/${classroom.id}`)}
+                      />
+                    </motion.div>
+                  ))}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </motion.div>
+      )}
+
+      {/* ═══ Books sections ═══ */}
       <motion.div
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ delay: 0.5 }}
         className="relative z-10 mt-10 w-full max-w-6xl space-y-10"
       >
-        <section className="space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 text-xl font-bold text-foreground/95 md:text-2xl">
-              最近学习
-              <span className="text-sm text-muted-foreground">{classrooms.length}</span>
-            </div>
-            <Link href="/courses" className="text-sm text-violet-600 hover:text-violet-500">
-              查看更多
-            </Link>
-          </div>
-          <div className="overflow-x-auto scrollbar-hide pb-1">
-            <div className="flex gap-4 min-w-max">
-              {classrooms.slice(0, 10).map((classroom) => (
-                <div key={classroom.id} className="w-[78vw] max-w-[280px] sm:w-[280px]">
-                  <ClassroomCard
-                    classroom={classroom}
-                    slide={thumbnails[classroom.id]}
-                    formatDate={formatDate}
-                    onDelete={handleDelete}
-                    confirmingDelete={pendingDeleteId === classroom.id}
-                    onConfirmDelete={() => confirmDelete(classroom.id)}
-                    onCancelDelete={() => setPendingDeleteId(null)}
-                    onClick={() => router.push(`/classroom/${classroom.id}`)}
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
-        </section>
-
         <section className="space-y-3">
           <div className="flex items-center justify-between">
             <h3 className="text-xl font-bold text-foreground/95 md:text-2xl">已购图书</h3>
@@ -1002,6 +1045,7 @@ function ClassroomCard({
   slide,
   formatDate,
   onDelete,
+  onRename,
   confirmingDelete,
   onConfirmDelete,
   onCancelDelete,
@@ -1011,6 +1055,7 @@ function ClassroomCard({
   slide?: Slide;
   formatDate: (ts: number) => string;
   onDelete: (id: string, e: React.MouseEvent) => void;
+  onRename: (id: string, newName: string) => void;
   confirmingDelete: boolean;
   onConfirmDelete: () => void;
   onCancelDelete: () => void;
@@ -1019,6 +1064,9 @@ function ClassroomCard({
   const { t } = useI18n();
   const thumbRef = useRef<HTMLDivElement>(null);
   const [thumbWidth, setThumbWidth] = useState(0);
+  const [editing, setEditing] = useState(false);
+  const [nameDraft, setNameDraft] = useState('');
+  const nameInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const el = thumbRef.current;
@@ -1029,6 +1077,25 @@ function ClassroomCard({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  useEffect(() => {
+    if (editing) nameInputRef.current?.focus();
+  }, [editing]);
+
+  const startRename = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setNameDraft(classroom.name);
+    setEditing(true);
+  };
+
+  const commitRename = () => {
+    if (!editing) return;
+    const trimmed = nameDraft.trim();
+    if (trimmed && trimmed !== classroom.name) {
+      onRename(classroom.id, trimmed);
+    }
+    setEditing(false);
+  };
 
   return (
     <div className="group cursor-pointer" onClick={confirmingDelete ? undefined : onClick}>
@@ -1072,6 +1139,14 @@ function ClassroomCard({
               >
                 <Trash2 className="size-3.5" />
               </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="absolute top-2 right-11 size-7 opacity-0 group-hover:opacity-100 transition-opacity bg-black/30 hover:bg-black/50 text-white hover:text-white backdrop-blur-sm rounded-full"
+                onClick={startRename}
+              >
+                <Pencil className="size-3.5" />
+              </Button>
             </motion.div>
           )}
         </AnimatePresence>
@@ -1114,32 +1189,53 @@ function ClassroomCard({
         <span className="shrink-0 inline-flex items-center rounded-full bg-violet-100 dark:bg-violet-900/30 px-2 py-0.5 text-[11px] font-medium text-violet-600 dark:text-violet-400">
           {classroom.sceneCount} {t('classroom.slides')} · {formatDate(classroom.updatedAt)}
         </span>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <p className="font-medium text-[15px] truncate text-foreground/90 min-w-0">
-              {classroom.name}
-            </p>
-          </TooltipTrigger>
-          <TooltipContent
-            side="bottom"
-            sideOffset={4}
-            className="!max-w-[min(90vw,32rem)] break-words whitespace-normal"
-          >
-            <div className="flex items-center gap-1.5">
-              <span className="break-all">{classroom.name}</span>
-              <button
-                className="shrink-0 p-0.5 rounded hover:bg-foreground/10 transition-colors"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  navigator.clipboard.writeText(classroom.name);
-                  toast.success(t('classroom.nameCopied'));
-                }}
+        {editing ? (
+          <div className="flex-1 min-w-0" onClick={(e) => e.stopPropagation()}>
+            <input
+              ref={nameInputRef}
+              value={nameDraft}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') commitRename();
+                if (e.key === 'Escape') setEditing(false);
+              }}
+              onBlur={commitRename}
+              maxLength={100}
+              placeholder={t('classroom.renamePlaceholder')}
+              className="w-full bg-transparent border-b border-violet-400/60 text-[15px] font-medium text-foreground/90 outline-none placeholder:text-muted-foreground/40"
+            />
+          </div>
+        ) : (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <p
+                className="font-medium text-[15px] truncate text-foreground/90 min-w-0 cursor-text"
+                onDoubleClick={startRename}
               >
-                <Copy className="size-3 opacity-60" />
-              </button>
-            </div>
-          </TooltipContent>
-        </Tooltip>
+                {classroom.name}
+              </p>
+            </TooltipTrigger>
+            <TooltipContent
+              side="bottom"
+              sideOffset={4}
+              className="!max-w-[min(90vw,32rem)] break-words whitespace-normal"
+            >
+              <div className="flex items-center gap-1.5">
+                <span className="break-all">{classroom.name}</span>
+                <button
+                  className="shrink-0 p-0.5 rounded hover:bg-foreground/10 transition-colors"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    navigator.clipboard.writeText(classroom.name);
+                    toast.success(t('classroom.nameCopied'));
+                  }}
+                >
+                  <Copy className="size-3 opacity-60" />
+                </button>
+              </div>
+            </TooltipContent>
+          </Tooltip>
+        )}
       </div>
     </div>
   );

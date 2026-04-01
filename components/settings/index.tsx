@@ -122,6 +122,8 @@ function getTTSProviderName(providerId: TTSProviderId, t: (key: string) => strin
     'glm-tts': t('settings.providerGLMTTS'),
     'qwen-tts': t('settings.providerQwenTTS'),
     'doubao-tts': t('settings.providerDoubaoTTS'),
+    'elevenlabs-tts': t('settings.providerElevenLabsTTS'),
+    'minimax-tts': t('settings.providerMiniMaxTTS'),
     'browser-native-tts': t('settings.providerBrowserNativeTTS'),
   };
   return names[providerId];
@@ -141,12 +143,16 @@ const IMAGE_PROVIDER_NAMES: Record<ImageProviderId, string> = {
   seedream: 'providerSeedream',
   'qwen-image': 'providerQwenImage',
   'nano-banana': 'providerNanoBanana',
+  'minimax-image': 'providerMiniMaxImage',
+  'grok-image': 'providerGrokImage',
 };
 
 const IMAGE_PROVIDER_ICONS: Record<ImageProviderId, string> = {
   seedream: '/logos/doubao.svg',
   'qwen-image': '/logos/bailian.svg',
   'nano-banana': '/logos/gemini.svg',
+  'minimax-image': '/logos/minimax.svg',
+  'grok-image': '/logos/grok.svg',
 };
 
 const VIDEO_PROVIDER_NAMES: Record<VideoProviderId, string> = {
@@ -154,6 +160,8 @@ const VIDEO_PROVIDER_NAMES: Record<VideoProviderId, string> = {
   kling: 'providerKling',
   veo: 'providerVeo',
   sora: 'providerSora',
+  'minimax-video': 'providerMiniMaxVideo',
+  'grok-video': 'providerGrokVideo',
 };
 
 const VIDEO_PROVIDER_ICONS: Record<VideoProviderId, string> = {
@@ -161,6 +169,8 @@ const VIDEO_PROVIDER_ICONS: Record<VideoProviderId, string> = {
   kling: '/logos/kling.svg',
   veo: '/logos/gemini.svg',
   sora: '/logos/openai.svg',
+  'minimax-video': '/logos/minimax.svg',
+  'grok-video': '/logos/grok.svg',
 };
 
 interface SettingsDialogProps {
@@ -521,6 +531,7 @@ export function SettingsDialog({ open, onOpenChange, initialSection }: SettingsD
         return null;
       case 'pdf': {
         const pdfProvider = PDF_PROVIDERS[selectedPdfProviderId];
+        if (!pdfProvider) return null;
         return (
           <>
             {pdfProvider.icon ? (
@@ -541,6 +552,7 @@ export function SettingsDialog({ open, onOpenChange, initialSection }: SettingsD
       }
       case 'web-search': {
         const wsProvider = WEB_SEARCH_PROVIDERS[selectedWebSearchProviderId];
+        if (!wsProvider) return null;
         return (
           <>
             {wsProvider.icon ? (
@@ -1022,6 +1034,7 @@ export function SettingsDialog({ open, onOpenChange, initialSection }: SettingsD
         baseUrl={providersConfig[selectedProviderId]?.baseUrl}
         providerType={providersConfig[selectedProviderId]?.type}
         requiresApiKey={providersConfig[selectedProviderId]?.requiresApiKey}
+        isServerConfigured={providersConfig[selectedProviderId]?.isServerConfigured}
       />
 
       {/* Add Provider Dialog */}

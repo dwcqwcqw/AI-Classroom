@@ -10,13 +10,11 @@ import type { AgentInfo } from '@/lib/generation/generation-pipeline';
 import type { Scene } from '@/lib/types/stage';
 import type { Action, SpeechAction } from '@/lib/types/action';
 import type { TTSProviderId } from '@/lib/audio/types';
+import { splitLongSpeechActions } from '@/lib/audio/tts-utils';
 import { generateMediaForOutlines } from '@/lib/media/media-orchestrator';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('SceneGenerator');
-const TTS_MAX_TEXT_LENGTH: Partial<Record<TTSProviderId, number>> = {
-  'glm-tts': 1024,
-};
 
 interface SceneContentResult {
   success: boolean;
@@ -324,7 +322,8 @@ export async function generateAndStoreTTS(
       text,
       audioId,
       ttsProviderId: settings.ttsProviderId,
-      ttsVoice: voiceOverride ?? settings.ttsVoice,
+      ttsModelId: ttsProviderConfig?.modelId,
+      ttsVoice: settings.ttsVoice,
       ttsSpeed: settings.ttsSpeed,
       ttsApiKey: ttsProviderConfig?.apiKey || undefined,
       ttsBaseUrl: ttsProviderConfig?.baseUrl || undefined,
