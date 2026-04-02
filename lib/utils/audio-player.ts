@@ -1,9 +1,12 @@
 /**
- * Audio Player - Audio player interface
+ * Audio Player — Safari-compatible implementation using Web Audio API
  *
- * Handles audio playback, pause, stop, and other operations
- * Loads pre-generated TTS audio files from IndexedDB
+ * Uses AudioContext (Web Audio API) which, once unlocked by a single user gesture,
+ * stays unlocked for the entire session. This avoids Safari's strict per-play()
+ * autoplay policy that blocks HTMLAudioElement.play() called after async gaps
+ * (e.g. after an IndexedDB read).
  *
+ * Falls back to HTMLAudioElement for environments where AudioContext is unavailable.
  */
 
 import { db } from '@/lib/utils/database';
@@ -11,278 +14,329 @@ import { createLogger } from '@/lib/logger';
 
 const log = createLogger('AudioPlayer');
 
-/**
- * Safari-compatible audio play helper.
- *
- * Safari (desktop and iOS) requires:
- * 1. The audio element is fully loaded (readyState >= HAVE_ENOUGH_DATA) before play()
- * 2. play() is called within a user-gesture context OR from a previously unlocked context
- * 3. On iOS, the audio element must have `playsInline` set
- *
- * This helper waits for `canplaythrough` if the element isn't ready yet, with a
- * reasonable timeout so it doesn't hang forever.
- */
-async function safariCompatiblePlay(audio: HTMLAudioElement): Promise<void> {
-  audio.setAttribute("playsinline", "");
+// ─── Shared AudioContext (one per page, unlocked once) ───────────────────────
 
-  // If already loaded enough, just play
-  if (audio.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
-    await audio.play();
-    return;
+let sharedContext: AudioContext | null = null;
+
+export function getAudioContext(): AudioContext | null {
+  if (typeof window === 'undefined') return null;
+  if (!sharedContext || sharedContext.state === 'closed') {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const AC = window.AudioContext ?? (window as any).webkitAudioContext;
+      if (AC) sharedContext = new AC();
+    } catch {
+      sharedContext = null;
+    }
   }
+  return sharedContext;
+}
 
-  // Wait for canplaythrough (or error) before playing, with a 10 s guard
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      cleanup();
-      // Try playing anyway — some Safari versions never fire canplaythrough for blobs
-      audio.play().then(resolve).catch(reject);
-    }, 10_000);
+/** Resume the AudioContext if it was suspended (required after page load on Safari) */
+async function ensureContextRunning(): Promise<void> {
+  const ctx = getAudioContext();
+  if (ctx && ctx.state === 'suspended') {
+    try {
+      await ctx.resume();
+    } catch {
+      // ignore
+    }
+  }
+}
 
-    const onCanPlay = () => {
-      cleanup();
-      audio.play().then(resolve).catch(reject);
-    };
-    const onError = () => {
-      cleanup();
-      reject(new Error(`Audio load error: ${audio.error?.message ?? 'unknown'}`));
-    };
-    const cleanup = () => {
-      clearTimeout(timeout);
-      audio.removeEventListener('canplaythrough', onCanPlay);
-      audio.removeEventListener('error', onError);
-    };
+// ─── Fetch audio bytes ────────────────────────────────────────────────────────
 
-    audio.addEventListener('canplaythrough', onCanPlay);
-    audio.addEventListener('error', onError);
-    // Trigger load if not already started
-    audio.load();
+async function fetchAudioBytes(url: string): Promise<ArrayBuffer> {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`Audio fetch failed: ${res.status}`);
+  return res.arrayBuffer();
+}
+
+async function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as ArrayBuffer);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsArrayBuffer(blob);
   });
 }
 
-/**
- * Audio player implementation
- */
+// ─── AudioContext-based player ────────────────────────────────────────────────
+
+interface ActiveNode {
+  source: AudioBufferSourceNode;
+  gainNode: GainNode;
+  startedAt: number;       // ctx.currentTime when started
+  pausedAt: number | null; // offset within buffer when paused
+  buffer: AudioBuffer;
+}
+
 export class AudioPlayer {
-  private audio: HTMLAudioElement | null = null;
+  private active: ActiveNode | null = null;
   private onEndedCallback: (() => void) | null = null;
   private muted: boolean = false;
   private volume: number = 1;
   private playbackRate: number = 1;
 
+  /** Decode bytes → AudioBuffer via Web Audio API */
+  private async decode(bytes: ArrayBuffer): Promise<AudioBuffer | null> {
+    const ctx = getAudioContext();
+    if (!ctx) return null;
+    try {
+      return await ctx.decodeAudioData(bytes.slice(0)); // slice to detach
+    } catch (e) {
+      log.warn('AudioContext decode failed, falling back to HTMLAudio:', e);
+      return null;
+    }
+  }
+
+  /** Start playback of an AudioBuffer from a given offset */
+  private startBuffer(buffer: AudioBuffer, offset = 0): void {
+    const ctx = getAudioContext();
+    if (!ctx) return;
+
+    // Stop any current node
+    this.stopActiveNode();
+
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    source.playbackRate.value = this.playbackRate;
+
+    const gainNode = ctx.createGain();
+    gainNode.gain.value = this.muted ? 0 : this.volume;
+
+    source.connect(gainNode);
+    gainNode.connect(ctx.destination);
+
+    source.onended = () => {
+      // Only fire if this source is still the active one (not stopped manually)
+      if (this.active?.source === source) {
+        this.active = null;
+        this.onEndedCallback?.();
+      }
+    };
+
+    source.start(0, offset);
+
+    this.active = {
+      source,
+      gainNode,
+      buffer,
+      startedAt: ctx.currentTime - offset,
+      pausedAt: null,
+    };
+  }
+
+  private stopActiveNode(): void {
+    if (this.active) {
+      try { this.active.source.onended = null; } catch { /* ignore */ }
+      try { this.active.source.stop(); } catch { /* ignore */ }
+      this.active = null;
+    }
+  }
+
   /**
-   * Play audio (from URL or IndexedDB pre-generated cache)
-   * @param audioId Audio ID
-   * @param audioUrl Optional server-generated audio URL (takes priority over IndexedDB)
-   * @returns true if audio started playing, false if no audio (TTS disabled or not generated)
+   * Play audio from a URL or IndexedDB cache.
+   * Returns true if audio started, false if no audio available.
    */
   public async play(audioId: string, audioUrl?: string): Promise<boolean> {
     try {
-      // 1. Try audioUrl first (server-generated TTS)
-      if (audioUrl) {
-        this.stop();
-        const audio = new Audio();
-        audio.setAttribute("playsinline", "");
-        audio.preload = 'auto';
-        if (this.muted) audio.volume = 0;
-        else audio.volume = this.volume;
-        audio.defaultPlaybackRate = this.playbackRate;
-        audio.playbackRate = this.playbackRate;
-        audio.addEventListener('ended', () => {
-          this.onEndedCallback?.();
-        });
-        // Set src after attaching listeners (Safari requirement)
-        audio.src = audioUrl;
-        this.audio = audio;
-        await safariCompatiblePlay(audio);
-        audio.playbackRate = this.playbackRate;
-        return true;
+      await ensureContextRunning();
+      const ctx = getAudioContext();
+
+      // ── Try Web Audio API path ──────────────────────────────────────────────
+      if (ctx) {
+        let bytes: ArrayBuffer | null = null;
+
+        if (audioUrl) {
+          // Server-generated audio URL
+          try {
+            bytes = await fetchAudioBytes(audioUrl);
+          } catch (e) {
+            log.warn('Audio URL fetch failed, will try HTMLAudio fallback:', e);
+          }
+        } else {
+          // IndexedDB blob
+          const record = await db.audioFiles.get(audioId);
+          if (!record) return false;
+          try {
+            bytes = await blobToArrayBuffer(record.blob);
+          } catch (e) {
+            log.warn('Blob→ArrayBuffer failed, will try HTMLAudio fallback:', e);
+          }
+        }
+
+        if (bytes) {
+          const buffer = await this.decode(bytes);
+          if (buffer) {
+            this.startBuffer(buffer);
+            return true;
+          }
+        }
       }
 
-      // 2. Fall back to IndexedDB (client-generated TTS)
-      const audioRecord = await db.audioFiles.get(audioId);
-
-      if (!audioRecord) {
-        // Pre-generated audio does not exist (generation failed), skip silently
-        return false;
-      }
-
-      // Stop current playback
-      this.stop();
-
-      const audio = new Audio();
-      audio.setAttribute("playsinline", "");
-      audio.preload = 'auto';
-
-      const blobUrl = URL.createObjectURL(audioRecord.blob);
-
-      if (this.muted) audio.volume = 0;
-      else audio.volume = this.volume;
-
-      audio.defaultPlaybackRate = this.playbackRate;
-      audio.playbackRate = this.playbackRate;
-
-      audio.addEventListener('ended', () => {
-        URL.revokeObjectURL(blobUrl);
-        this.onEndedCallback?.();
-      });
-
-      // Set src after attaching listeners (Safari requirement)
-      audio.src = blobUrl;
-      this.audio = audio;
-
-      await safariCompatiblePlay(audio);
-      // Re-apply after play() — some browsers reset during load
-      audio.playbackRate = this.playbackRate;
-      return true;
+      // ── HTMLAudioElement fallback ───────────────────────────────────────────
+      return this.playWithHTMLAudio(audioId, audioUrl);
     } catch (error) {
       log.error('Failed to play audio:', error);
       throw error;
     }
   }
 
-  /**
-   * Pause playback
-   */
-  public pause(): void {
-    if (this.audio && !this.audio.paused) {
-      this.audio.pause();
-    }
-  }
+  /** HTMLAudioElement fallback for environments without Web Audio support */
+  private async playWithHTMLAudio(audioId: string, audioUrl?: string): Promise<boolean> {
+    let src: string | null = null;
+    let needsRevoke = false;
 
-  /**
-   * Stop playback
-   */
-  public stop(): void {
-    if (this.audio) {
-      this.audio.pause();
-      this.audio.currentTime = 0;
-      this.audio = null;
+    if (audioUrl) {
+      src = audioUrl;
+    } else {
+      const record = await db.audioFiles.get(audioId);
+      if (!record) return false;
+      src = URL.createObjectURL(record.blob);
+      needsRevoke = true;
     }
-    // Note: onEndedCallback intentionally NOT cleared here because play()
-    // calls stop() internally — clearing would break the callback chain.
-    // Stale callbacks are harmless: engine mode check prevents processNext().
-  }
 
-  /**
-   * Resume playback
-   */
-  public resume(): void {
-    if (this.audio?.paused) {
-      this.audio.playbackRate = this.playbackRate;
-      this.audio.play().catch((error) => {
-        log.error('Failed to resume audio:', error);
+    return new Promise<boolean>((resolve, reject) => {
+      const audio = document.createElement('audio');
+      audio.setAttribute('playsinline', '');
+      audio.preload = 'auto';
+
+      const cleanup = () => {
+        if (needsRevoke && src) URL.revokeObjectURL(src);
+      };
+
+      audio.addEventListener('ended', () => {
+        cleanup();
+        this.onEndedCallback?.();
       });
-    }
+      audio.addEventListener('error', () => {
+        cleanup();
+        reject(new Error('HTMLAudio playback error'));
+      });
+
+      audio.src = src!;
+      audio.volume = this.muted ? 0 : this.volume;
+
+      audio.play()
+        .then(() => resolve(true))
+        .catch((e) => {
+          cleanup();
+          reject(e);
+        });
+    });
   }
 
-  /**
-   * Get current playback status (actively playing, not paused)
-   */
+  public pause(): void {
+    if (!this.active) return;
+    const ctx = getAudioContext();
+    if (!ctx) return;
+
+    const elapsed = ctx.currentTime - this.active.startedAt;
+    this.active.pausedAt = elapsed;
+    try { this.active.source.stop(); } catch { /* ignore */ }
+    // Keep active so resume() knows the buffer + offset
+  }
+
+  public resume(): void {
+    if (!this.active || this.active.pausedAt === null) return;
+    const offset = this.active.pausedAt;
+    const buffer = this.active.buffer;
+    // Clear active first so startBuffer doesn't try to stop a stopped source
+    this.active = null;
+    ensureContextRunning().then(() => {
+      this.startBuffer(buffer, offset);
+    });
+  }
+
+  public stop(): void {
+    this.stopActiveNode();
+  }
+
   public isPlaying(): boolean {
-    return this.audio !== null && !this.audio.paused;
+    if (!this.active) return false;
+    return this.active.pausedAt === null;
   }
 
-  /**
-   * Whether there is active audio (playing or paused, but not ended)
-   * Used to decide whether to resume playback or skip to the next line
-   */
   public hasActiveAudio(): boolean {
-    return this.audio !== null;
+    return this.active !== null;
   }
 
-  /**
-   * Get current playback time (milliseconds)
-   */
   public getCurrentTime(): number {
-    return this.audio ? this.audio.currentTime * 1000 : 0;
+    if (!this.active) return 0;
+    const ctx = getAudioContext();
+    if (!ctx) return 0;
+    if (this.active.pausedAt !== null) return this.active.pausedAt * 1000;
+    return (ctx.currentTime - this.active.startedAt) * 1000;
   }
 
-  /**
-   * Get audio duration (milliseconds)
-   */
   public getDuration(): number {
-    return this.audio && !isNaN(this.audio.duration) ? this.audio.duration * 1000 : 0;
+    if (!this.active) return 0;
+    return this.active.buffer.duration * 1000;
   }
 
-  /**
-   * Set playback ended callback
-   */
   public onEnded(callback: () => void): void {
     this.onEndedCallback = callback;
   }
 
-  /**
-   * Set mute state (takes effect immediately on currently playing audio)
-   */
   public setMuted(muted: boolean): void {
     this.muted = muted;
-    if (this.audio) {
-      this.audio.volume = muted ? 0 : this.volume;
+    if (this.active) {
+      this.active.gainNode.gain.value = muted ? 0 : this.volume;
     }
   }
 
-  /**
-   * Set volume (0-1)
-   */
   public setVolume(volume: number): void {
     this.volume = Math.max(0, Math.min(1, volume));
-    if (this.audio && !this.muted) {
-      this.audio.volume = this.volume;
+    if (this.active && !this.muted) {
+      this.active.gainNode.gain.value = this.volume;
     }
   }
 
-  /**
-   * Set playback speed (takes effect immediately on currently playing audio)
-   */
   public setPlaybackRate(rate: number): void {
     this.playbackRate = Math.max(0.5, Math.min(2, rate));
-    if (this.audio) {
-      this.audio.playbackRate = this.playbackRate;
+    if (this.active) {
+      this.active.source.playbackRate.value = this.playbackRate;
     }
   }
 
-  /**
-   * Destroy the player
-   */
   public destroy(): void {
     this.stop();
     this.onEndedCallback = null;
   }
 }
 
-/**
- * Create an audio player instance
- */
 export function createAudioPlayer(): AudioPlayer {
   return new AudioPlayer();
 }
 
 /**
- * Unlock audio playback on mobile/Safari browsers.
+ * Unlock the shared AudioContext on first user gesture.
  *
- * iOS Safari and some Android browsers block audio until a direct user gesture
- * triggers playback. Call this synchronously inside a touch/click handler before
- * any async work so the browser grants audio permission for subsequent plays.
+ * Call this synchronously in a click/touch handler. Once the AudioContext
+ * is resumed, all subsequent play() calls work without user-gesture restriction —
+ * including calls made after async gaps (IndexedDB reads, fetch, etc.).
  *
- * Uses a minimal silent WAV (universally supported, including Safari) rather than
- * MP3 to ensure the audio element actually decodes on all platforms.
+ * This is the correct fix for Safari's audio autoplay policy.
  */
 export function unlockMobileAudio(): void {
   if (typeof window === 'undefined') return;
 
+  const ctx = getAudioContext();
+  if (!ctx) return;
+
+  if (ctx.state === 'suspended') {
+    ctx.resume().catch(() => {});
+  }
+
+  // Also play a zero-length silent buffer to fully unlock (some iOS versions require this)
   try {
-    // Minimal valid silent WAV (44-byte header + 0 samples)
-    // WAV is universally supported including iOS Safari, whereas MP3 data URIs
-    // can fail to decode on some Safari versions.
-    const silentWav =
-      'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
-    const audio = new Audio();
-    audio.setAttribute("playsinline", "");
-    audio.src = silentWav;
-    audio.volume = 0;
-    audio.play().catch(() => {});
+    const buf = ctx.createBuffer(1, 1, 22050);
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.connect(ctx.destination);
+    src.start(0);
   } catch {
-    // Ignore — best-effort unlock
+    // ignore
   }
 }

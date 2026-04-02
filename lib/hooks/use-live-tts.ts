@@ -21,6 +21,7 @@ import { useRef, useCallback, useEffect } from 'react';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useAgentRegistry } from '@/lib/orchestration/registry/store';
 import { createLogger } from '@/lib/logger';
+import { getAudioContext } from '@/lib/utils/audio-player';
 
 const log = createLogger('LiveTTS');
 
@@ -133,18 +134,8 @@ export function useLiveTTS(options: UseLiveTTSOptions = {}) {
       const binary = atob(data.base64);
       const bytes = new Uint8Array(binary.length);
       for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-      const blob = new Blob([bytes], { type: `audio/${data.format}` });
-      const url = URL.createObjectURL(blob);
 
-      const audio = new Audio();
-      // Safari requires playsInline and preload before src assignment
-      audio.setAttribute("playsinline", "");
-      audio.preload = 'auto';
-      audio.volume = settings.ttsVolume ?? 1;
-      currentAudioRef.current = audio;
-
-      const cleanup = () => {
-        URL.revokeObjectURL(url);
+      const afterPlay = () => {
         currentAudioRef.current = null;
         isPlayingRef.current = false;
         if (!mountedRef.current) return;
@@ -153,27 +144,54 @@ export function useLiveTTS(options: UseLiveTTSOptions = {}) {
         }
         playNext();
       };
-      audio.addEventListener('ended', cleanup);
-      audio.addEventListener('error', cleanup);
 
-      // Set src after attaching listeners (Safari requirement)
-      audio.src = url;
+      // Try Web Audio API path using the shared AudioContext from audio-player.
+      // That context is already unlocked when the user clicks Play (via unlockMobileAudio).
+      // Using it here avoids Safari's per-play() autoplay restriction.
+      const ctx = getAudioContext();
+      if (ctx) {
+        try {
+          if (ctx.state === 'suspended') await ctx.resume();
+          const buffer = await ctx.decodeAudioData(bytes.buffer.slice(0));
 
-      // Safari-compatible play: wait for canplaythrough if not ready yet
-      if (audio.readyState < HTMLMediaElement.HAVE_ENOUGH_DATA) {
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(() => { cleanup2(); audio.play().then(resolve).catch(resolve); }, 8_000);
-          const cleanup2 = () => {
-            clearTimeout(timer);
-            audio.removeEventListener('canplaythrough', onReady);
-          };
-          const onReady = () => { cleanup2(); audio.play().then(resolve).catch(resolve); };
-          audio.addEventListener('canplaythrough', onReady);
-          audio.load();
-        });
-      } else {
-        await audio.play();
+          await new Promise<void>((resolve) => {
+            const gainNode = ctx.createGain();
+            gainNode.gain.value = settings.ttsVolume ?? 1;
+            gainNode.connect(ctx.destination);
+
+            const source = ctx.createBufferSource();
+            source.buffer = buffer;
+            source.connect(gainNode);
+            source.onended = () => {
+              resolve();
+              afterPlay();
+            };
+            source.start(0);
+          });
+          return;
+        } catch (audioCtxErr) {
+          log.warn('AudioContext playback failed, falling back to HTMLAudio:', audioCtxErr);
+        }
       }
+
+      // HTMLAudioElement fallback
+      const blob = new Blob([bytes], { type: `audio/${data.format}` });
+      const url = URL.createObjectURL(blob);
+
+      const audio = new Audio();
+      audio.setAttribute("playsinline", "");
+      audio.preload = 'auto';
+      audio.volume = settings.ttsVolume ?? 1;
+      currentAudioRef.current = audio;
+
+      const cleanupHtml = () => {
+        URL.revokeObjectURL(url);
+        afterPlay();
+      };
+      audio.addEventListener('ended', cleanupHtml);
+      audio.addEventListener('error', cleanupHtml);
+      audio.src = url;
+      await audio.play();
     } catch (err) {
       log.warn('Live TTS error:', err);
       isPlayingRef.current = false;
