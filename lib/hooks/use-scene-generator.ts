@@ -31,9 +31,28 @@ interface SceneActionsResult {
 }
 
 const GENERATION_MAX_RETRIES = 2;
+// Per-request fetch timeout — prevents a hung LLM/TTS API from stalling forever
+const FETCH_TIMEOUT_MS = 90_000; // 90 s per request
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Wrap a fetch signal with a timeout. Returns a combined AbortSignal that fires
+ * after `timeoutMs` OR when the parent signal fires, whichever comes first.
+ */
+function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error(`Request timed out after ${timeoutMs}ms`)), timeoutMs);
+  // Forward parent abort
+  signal?.addEventListener('abort', () => {
+    clearTimeout(timer);
+    controller.abort(signal.reason);
+  });
+  // Clear timer when our own signal fires (no double-fire)
+  controller.signal.addEventListener('abort', () => clearTimeout(timer));
+  return controller.signal;
 }
 
 function formatRetryError(
@@ -106,7 +125,7 @@ async function fetchSceneContent(
         method: 'POST',
         headers: getApiHeaders(),
         body: JSON.stringify(params),
-        signal,
+        signal: withTimeout(signal, FETCH_TIMEOUT_MS),
       });
 
       if (!response.ok) {
@@ -175,7 +194,7 @@ async function fetchSceneActions(
         method: 'POST',
         headers: getApiHeaders(),
         body: JSON.stringify(params),
-        signal,
+        signal: withTimeout(signal, FETCH_TIMEOUT_MS),
       });
 
       if (!response.ok) {
@@ -246,7 +265,7 @@ export async function generateAndStoreTTS(
       ttsApiKey: ttsProviderConfig?.apiKey || undefined,
       ttsBaseUrl: ttsProviderConfig?.baseUrl || undefined,
     }),
-    signal,
+    signal: withTimeout(signal, FETCH_TIMEOUT_MS),
   });
 
   const data = await response
@@ -489,21 +508,19 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
             const scene = actionsResult.scene;
             const settings = useSettingsStore.getState();
 
-            // TTS generation — failure means the whole scene fails
+            // TTS generation — failure is non-fatal: log a warning and continue
+            // so a TTS outage never blocks content generation for remaining scenes.
             if (settings.ttsEnabled && settings.ttsProviderId !== 'browser-native-tts') {
-              const ttsResult = await generateTTSForScene(scene, outline.title, signal);
-              if (!ttsResult.success) {
-                if (abortRef.current || store.getState().generationEpoch !== startEpoch) {
-                  pausedByFailureOrAbort = true;
-                  break;
-                }
-                store
-                  .getState()
-                  .addFailedOutline(outline, 'tts', ttsResult.error || 'TTS generation failed');
-                options.onSceneFailed?.(outline, ttsResult.error || 'TTS generation failed');
-                store.getState().setGenerationStatus('paused');
+              if (abortRef.current || store.getState().generationEpoch !== startEpoch) {
                 pausedByFailureOrAbort = true;
                 break;
+              }
+              const ttsResult = await generateTTSForScene(scene, outline.title, signal);
+              if (!ttsResult.success) {
+                log.warn(
+                  `TTS failed for scene "${outline.title}" (${ttsResult.failedCount} clips missing) — continuing without audio: ${ttsResult.error}`,
+                );
+                // Continue generation — scene will play silently
               }
             }
 

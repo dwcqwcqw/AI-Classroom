@@ -298,46 +298,73 @@ export function Stage({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const scr = screen as any;
 
-    if (document.fullscreenElement) {
-      // --- Exit fullscreen ---
-      nav.keyboard?.unlock?.();
-      await document.exitFullscreen().catch(() => {});
-      // Unlock orientation on mobile
-      if (isMobile) {
+    // iOS Safari does not support requestFullscreen at all.
+    // Detect by checking both the standard API and webkit prefix.
+    const hasFullscreenAPI =
+      typeof document.exitFullscreen === 'function' ||
+      typeof (document as { webkitExitFullscreen?: () => void }).webkitExitFullscreen === 'function';
+
+    if (!hasFullscreenAPI) {
+      // iOS Safari: simulate "immersive" mode by maximising the stage UI within
+      // the viewport (collapse panels, enter a CSS pseudo-fullscreen state).
+      if (!isPresenting) {
+        setIsPresenting(true);
+        setControlsVisible(true);
+        setSidebarCollapsed(true);
+        setChatAreaCollapsed(true);
+        // Request landscape via orientation API — may be denied, that's fine
+        scr.orientation?.lock?.('landscape').catch(() => {});
+      } else {
+        setIsPresenting(false);
+        setControlsVisible(true);
         scr.orientation?.unlock?.();
       }
+      return;
+    }
+
+    const fsElement =
+      document.fullscreenElement ??
+      (document as { webkitFullscreenElement?: Element }).webkitFullscreenElement;
+
+    if (fsElement) {
+      // --- Exit fullscreen ---
+      nav.keyboard?.unlock?.();
+      const exitFn =
+        document.exitFullscreen?.bind(document) ??
+        (document as { webkitExitFullscreen?: () => void }).webkitExitFullscreen?.bind(document);
+      await exitFn?.().catch(() => {});
+      if (isMobile) scr.orientation?.unlock?.();
       return;
     }
 
     // --- Enter fullscreen ---
     try {
       setControlsVisible(true);
-      // On mobile, some browsers only allow fullscreen on documentElement
-      const fsTarget =
-        isMobile && !stageElement.requestFullscreen
-          ? document.documentElement
-          : stageElement;
-      await fsTarget.requestFullscreen();
-      // Lock Escape key so it doesn't auto-exit fullscreen
+      // Try stageElement first; fall back to documentElement for some mobile browsers
+      const requestFn =
+        stageElement.requestFullscreen?.bind(stageElement) ??
+        (stageElement as { webkitRequestFullscreen?: () => Promise<void> }).webkitRequestFullscreen?.bind(stageElement) ??
+        document.documentElement.requestFullscreen?.bind(document.documentElement);
+      if (requestFn) await requestFn();
       await nav.keyboard?.lock?.(['Escape']).catch(() => {});
-      // Lock orientation to landscape on mobile
-      if (isMobile) {
-        await scr.orientation?.lock?.('landscape').catch(() => {});
-      }
+      if (isMobile) await scr.orientation?.lock?.('landscape').catch(() => {});
       setSidebarCollapsed(true);
       setChatAreaCollapsed(true);
     } catch {
       console.warn('[Presentation] Fullscreen request denied — browser policy');
     }
-  }, [setChatAreaCollapsed, setSidebarCollapsed]);
+  }, [isPresenting, setChatAreaCollapsed, setSidebarCollapsed]);
 
   useEffect(() => {
     const onFullscreenChange = () => {
-      // On mobile we may fullscreen documentElement; treat any fullscreen active state as presenting
+      const fsElement =
+        document.fullscreenElement ??
+        (document as { webkitFullscreenElement?: Element }).webkitFullscreenElement;
+      // Treat any fullscreen state (on stage div or documentElement) as presenting
       const active =
-        document.fullscreenElement !== null &&
-        (document.fullscreenElement === stageRef.current ||
-          document.fullscreenElement === document.documentElement);
+        fsElement !== null &&
+        fsElement !== undefined &&
+        (fsElement === stageRef.current || fsElement === document.documentElement);
       setIsPresenting(active);
 
       if (!active) {
@@ -351,7 +378,12 @@ export function Stage({
     };
 
     document.addEventListener('fullscreenchange', onFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', onFullscreenChange);
+    // Safari desktop uses webkit-prefixed event
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', onFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', onFullscreenChange);
+    };
   }, [clearPresentationIdleTimer]);
 
   useEffect(() => {

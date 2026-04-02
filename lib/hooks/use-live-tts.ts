@@ -136,7 +136,10 @@ export function useLiveTTS(options: UseLiveTTSOptions = {}) {
       const blob = new Blob([bytes], { type: `audio/${data.format}` });
       const url = URL.createObjectURL(blob);
 
-      const audio = new Audio(url);
+      const audio = new Audio();
+      // Safari requires playsInline and preload before src assignment
+      audio.playsInline = true;
+      audio.preload = 'auto';
       audio.volume = settings.ttsVolume ?? 1;
       currentAudioRef.current = audio;
 
@@ -150,10 +153,27 @@ export function useLiveTTS(options: UseLiveTTSOptions = {}) {
         }
         playNext();
       };
-      audio.onended = cleanup;
-      audio.onerror = cleanup;
+      audio.addEventListener('ended', cleanup);
+      audio.addEventListener('error', cleanup);
 
-      await audio.play();
+      // Set src after attaching listeners (Safari requirement)
+      audio.src = url;
+
+      // Safari-compatible play: wait for canplaythrough if not ready yet
+      if (audio.readyState < HTMLMediaElement.HAVE_ENOUGH_DATA) {
+        await new Promise<void>((resolve) => {
+          const timer = setTimeout(() => { cleanup2(); audio.play().then(resolve).catch(resolve); }, 8_000);
+          const cleanup2 = () => {
+            clearTimeout(timer);
+            audio.removeEventListener('canplaythrough', onReady);
+          };
+          const onReady = () => { cleanup2(); audio.play().then(resolve).catch(resolve); };
+          audio.addEventListener('canplaythrough', onReady);
+          audio.load();
+        });
+      } else {
+        await audio.play();
+      }
     } catch (err) {
       log.warn('Live TTS error:', err);
       isPlayingRef.current = false;

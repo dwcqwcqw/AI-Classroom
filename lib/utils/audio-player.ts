@@ -12,6 +12,55 @@ import { createLogger } from '@/lib/logger';
 const log = createLogger('AudioPlayer');
 
 /**
+ * Safari-compatible audio play helper.
+ *
+ * Safari (desktop and iOS) requires:
+ * 1. The audio element is fully loaded (readyState >= HAVE_ENOUGH_DATA) before play()
+ * 2. play() is called within a user-gesture context OR from a previously unlocked context
+ * 3. On iOS, the audio element must have `playsInline` set
+ *
+ * This helper waits for `canplaythrough` if the element isn't ready yet, with a
+ * reasonable timeout so it doesn't hang forever.
+ */
+async function safariCompatiblePlay(audio: HTMLAudioElement): Promise<void> {
+  audio.playsInline = true;
+
+  // If already loaded enough, just play
+  if (audio.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
+    await audio.play();
+    return;
+  }
+
+  // Wait for canplaythrough (or error) before playing, with a 10 s guard
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      cleanup();
+      // Try playing anyway — some Safari versions never fire canplaythrough for blobs
+      audio.play().then(resolve).catch(reject);
+    }, 10_000);
+
+    const onCanPlay = () => {
+      cleanup();
+      audio.play().then(resolve).catch(reject);
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error(`Audio load error: ${audio.error?.message ?? 'unknown'}`));
+    };
+    const cleanup = () => {
+      clearTimeout(timeout);
+      audio.removeEventListener('canplaythrough', onCanPlay);
+      audio.removeEventListener('error', onError);
+    };
+
+    audio.addEventListener('canplaythrough', onCanPlay);
+    audio.addEventListener('error', onError);
+    // Trigger load if not already started
+    audio.load();
+  });
+}
+
+/**
  * Audio player implementation
  */
 export class AudioPlayer {
@@ -32,17 +81,21 @@ export class AudioPlayer {
       // 1. Try audioUrl first (server-generated TTS)
       if (audioUrl) {
         this.stop();
-        this.audio = new Audio();
-        this.audio.src = audioUrl;
-        if (this.muted) this.audio.volume = 0;
-        else this.audio.volume = this.volume;
-        this.audio.defaultPlaybackRate = this.playbackRate;
-        this.audio.playbackRate = this.playbackRate;
-        this.audio.addEventListener('ended', () => {
+        const audio = new Audio();
+        audio.playsInline = true;
+        audio.preload = 'auto';
+        if (this.muted) audio.volume = 0;
+        else audio.volume = this.volume;
+        audio.defaultPlaybackRate = this.playbackRate;
+        audio.playbackRate = this.playbackRate;
+        audio.addEventListener('ended', () => {
           this.onEndedCallback?.();
         });
-        await this.audio.play();
-        this.audio.playbackRate = this.playbackRate;
+        // Set src after attaching listeners (Safari requirement)
+        audio.src = audioUrl;
+        this.audio = audio;
+        await safariCompatiblePlay(audio);
+        audio.playbackRate = this.playbackRate;
         return true;
       }
 
@@ -57,29 +110,30 @@ export class AudioPlayer {
       // Stop current playback
       this.stop();
 
-      // Create audio element
-      this.audio = new Audio();
+      const audio = new Audio();
+      audio.playsInline = true;
+      audio.preload = 'auto';
 
-      // Set audio source
       const blobUrl = URL.createObjectURL(audioRecord.blob);
-      this.audio.src = blobUrl;
-      if (this.muted) this.audio.volume = 0;
-      else this.audio.volume = this.volume;
 
-      // Apply playback rate
-      this.audio.defaultPlaybackRate = this.playbackRate;
-      this.audio.playbackRate = this.playbackRate;
+      if (this.muted) audio.volume = 0;
+      else audio.volume = this.volume;
 
-      // Set ended callback
-      this.audio.addEventListener('ended', () => {
+      audio.defaultPlaybackRate = this.playbackRate;
+      audio.playbackRate = this.playbackRate;
+
+      audio.addEventListener('ended', () => {
         URL.revokeObjectURL(blobUrl);
         this.onEndedCallback?.();
       });
 
-      // Play
-      await this.audio.play();
+      // Set src after attaching listeners (Safari requirement)
+      audio.src = blobUrl;
+      this.audio = audio;
+
+      await safariCompatiblePlay(audio);
       // Re-apply after play() — some browsers reset during load
-      this.audio.playbackRate = this.playbackRate;
+      audio.playbackRate = this.playbackRate;
       return true;
     } catch (error) {
       log.error('Failed to play audio:', error);
@@ -205,23 +259,29 @@ export function createAudioPlayer(): AudioPlayer {
 }
 
 /**
- * Unlock audio playback on mobile browsers (iOS/Android).
+ * Unlock audio playback on mobile/Safari browsers.
  *
- * Mobile browsers block audio until a direct user gesture triggers playback.
- * Call this synchronously inside a touch/click handler before any async work
- * so the browser grants audio permission for subsequent plays in the same task.
+ * iOS Safari and some Android browsers block audio until a direct user gesture
+ * triggers playback. Call this synchronously inside a touch/click handler before
+ * any async work so the browser grants audio permission for subsequent plays.
+ *
+ * Uses a minimal silent WAV (universally supported, including Safari) rather than
+ * MP3 to ensure the audio element actually decodes on all platforms.
  */
 export function unlockMobileAudio(): void {
   if (typeof window === 'undefined') return;
 
-  // Play a zero-duration silent audio to satisfy the user-gesture requirement
   try {
-    const silentAudio = new Audio();
-    // Minimal silent MP3 (44 bytes, 0.001 s)
-    silentAudio.src =
-      'data:audio/mpeg;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4LjI5LjEwMAAAAAAAAAAAAAAA//OEAAAAAAAAAAAAAAAAAAAAAAAASW5mbwAAAA8AAAABAAADQgD///////////////////////////////////////////8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//MUZAAAAAGkAAAAAAAAA0gAAAAATEFNRTMuOTlyBmAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA//MURAAAAA0gAAAAAAADSAAAAATEFNRTMuOTlyBmAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==';
-    silentAudio.volume = 0;
-    silentAudio.play().catch(() => {});
+    // Minimal valid silent WAV (44-byte header + 0 samples)
+    // WAV is universally supported including iOS Safari, whereas MP3 data URIs
+    // can fail to decode on some Safari versions.
+    const silentWav =
+      'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
+    const audio = new Audio();
+    audio.playsInline = true;
+    audio.src = silentWav;
+    audio.volume = 0;
+    audio.play().catch(() => {});
   } catch {
     // Ignore — best-effort unlock
   }
