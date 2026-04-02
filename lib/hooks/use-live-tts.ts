@@ -138,7 +138,7 @@ export function useLiveTTS(options: UseLiveTTSOptions = {}) {
 
       const audio = new Audio();
       // Safari requires playsInline and preload before src assignment
-      audio.playsInline = true;
+      audio.setAttribute("playsinline", "");
       audio.preload = 'auto';
       audio.volume = settings.ttsVolume ?? 1;
       currentAudioRef.current = audio;

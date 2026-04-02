@@ -23,7 +23,7 @@ const log = createLogger('AudioPlayer');
  * reasonable timeout so it doesn't hang forever.
  */
 async function safariCompatiblePlay(audio: HTMLAudioElement): Promise<void> {
-  audio.playsInline = true;
+  audio.setAttribute("playsinline", "");
 
   // If already loaded enough, just play
   if (audio.readyState >= HTMLMediaElement.HAVE_ENOUGH_DATA) {
@@ -82,7 +82,7 @@ export class AudioPlayer {
       if (audioUrl) {
         this.stop();
         const audio = new Audio();
-        audio.playsInline = true;
+        audio.setAttribute("playsinline", "");
         audio.preload = 'auto';
         if (this.muted) audio.volume = 0;
         else audio.volume = this.volume;
@@ -111,7 +111,7 @@ export class AudioPlayer {
       this.stop();
 
       const audio = new Audio();
-      audio.playsInline = true;
+      audio.setAttribute("playsinline", "");
       audio.preload = 'auto';
 
       const blobUrl = URL.createObjectURL(audioRecord.blob);
@@ -278,7 +278,7 @@ export function unlockMobileAudio(): void {
     const silentWav =
       'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAAAAA=';
     const audio = new Audio();
-    audio.playsInline = true;
+    audio.setAttribute("playsinline", "");
     audio.src = silentWav;
     audio.volume = 0;
     audio.play().catch(() => {});
