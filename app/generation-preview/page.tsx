@@ -442,6 +442,7 @@ function GenerationPreviewContent() {
           };
 
           // No outlines yet — agent generation uses only stage name + description
+          const agentCustomPrompt = useSettingsStore.getState().agentCustomPrompt;
           const agentResp = await fetch('/api/generate/agent-profiles', {
             method: 'POST',
             headers: getApiHeaders(),
@@ -451,6 +452,7 @@ function GenerationPreviewContent() {
               availableAvatars: allAvatars.map((a) => a.path),
               avatarDescriptions: allAvatars.map((a) => ({ path: a.path, desc: a.desc })),
               availableVoices: getAvailableVoicesForGeneration(),
+              customPrompt: agentCustomPrompt?.trim() || undefined,
             }),
             signal,
           });

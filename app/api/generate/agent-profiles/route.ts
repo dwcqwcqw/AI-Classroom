@@ -38,6 +38,8 @@ interface RequestBody {
   availableAvatars: string[];
   avatarDescriptions?: Array<{ path: string; desc: string }>;
   availableVoices?: Array<{ providerId: string; voiceId: string; voiceName: string }>;
+  /** Optional user-written instruction for how to design the agents */
+  customPrompt?: string;
 }
 
 function stripCodeFences(text: string): string {
@@ -61,6 +63,7 @@ export async function POST(req: NextRequest) {
       availableAvatars,
       avatarDescriptions,
       availableVoices,
+      customPrompt,
     } = body;
     stageName = stageInfo?.name;
 
@@ -90,7 +93,7 @@ export async function POST(req: NextRequest) {
           .join('\n')
       : null;
 
-    const systemPrompt = `You are an expert instructional designer. Generate agent profiles for a multi-agent classroom simulation. Decide the appropriate number of agents (typically 3-5) based on the course content and complexity. Return ONLY valid JSON, no markdown or explanation.`;
+    const systemPrompt = `You are an expert instructional designer. Generate agent profiles for a multi-agent classroom simulation. Decide the appropriate number of agents (typically 3-5) based on the course content and complexity. Return ONLY valid JSON, no markdown or explanation.${customPrompt ? ' The user has provided additional instructions that must be followed.' : ''}`;
 
     // Build voice list for prompt (if available)
     const voiceListStr =
@@ -113,7 +116,7 @@ export async function POST(req: NextRequest) {
       ? ',\n      "voice": "string (voice id from available list, e.g. \'qwen-tts::Cherry\')"'
       : '';
 
-    const userPrompt = `Generate agent profiles for the following course:
+    const userPrompt = `Generate agent profiles for the following course:${customPrompt ? `\n\n## User's Custom Instructions (MUST follow these)\n\n${customPrompt}` : ''}
 
 Course name: ${stageInfo.name}
 ${stageInfo.description ? `Course description: ${stageInfo.description}` : ''}

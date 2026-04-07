@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useMemo } from 'react';
-import { Bot, Check, ChevronLeft, Globe, Paperclip, FileText, X, Globe2 } from 'lucide-react';
+import { Bot, Check, ChevronLeft, Globe, Paperclip, FileText, X, Globe2, LayoutList, Minus, Plus } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   Select,
@@ -21,6 +21,7 @@ import type { WebSearchProviderId } from '@/lib/web-search/types';
 import type { ProviderId } from '@/lib/ai/providers';
 import type { SettingsSection } from '@/lib/types/settings';
 import { MediaPopover } from '@/components/generation/media-popover';
+import type { SceneCountConfig } from '@/lib/types/generation';
 
 // ─── Constants ───────────────────────────────────────────────
 const MAX_PDF_SIZE_MB = 50;
@@ -37,6 +38,9 @@ export interface GenerationToolbarProps {
   pdfFile: File | null;
   onPdfFileChange: (file: File | null) => void;
   onPdfError: (error: string | null) => void;
+  // Scene counts
+  sceneCounts: SceneCountConfig;
+  onSceneCountsChange: (counts: SceneCountConfig) => void;
 }
 
 // ─── Component ───────────────────────────────────────────────
@@ -49,6 +53,8 @@ export function GenerationToolbar({
   pdfFile,
   onPdfFileChange,
   onPdfError,
+  sceneCounts,
+  onSceneCountsChange,
 }: GenerationToolbarProps) {
   const { t } = useI18n();
   const currentProviderId = useSettingsStore((s) => s.providerId);
@@ -374,9 +380,145 @@ export function GenerationToolbar({
       {/* ── Separator ── */}
       <div className="w-px h-4 bg-border/60 mx-1" />
 
+      {/* ── Scene count popover ── */}
+      <SceneCountPopover
+        counts={sceneCounts}
+        onChange={onSceneCountsChange}
+        pillCls={pillCls}
+        pillMuted={pillMuted}
+        pillActive={pillActive}
+      />
+
       {/* ── Media popover ── */}
       <MediaPopover onSettingsOpen={onSettingsOpen} />
     </div>
+  );
+}
+
+// ─── SceneCountPopover ───────────────────────────────────────
+
+interface CounterRowProps {
+  label: string;
+  subLabel?: string;
+  value: number;
+  onChange: (v: number) => void;
+  min?: number;
+  max?: number;
+  autoLabel?: string;
+}
+
+function CounterRow({ label, subLabel, value, onChange, min = 0, max = 20, autoLabel = '自动' }: CounterRowProps) {
+  return (
+    <div className="flex items-center gap-2 py-1.5">
+      <div className="flex-1 min-w-0">
+        <p className="text-[13px] font-medium leading-tight">{label}</p>
+        {subLabel && <p className="text-[11px] text-muted-foreground/60">{subLabel}</p>}
+      </div>
+      <div className="flex items-center rounded-full bg-muted/50 h-6 shrink-0">
+        <button
+          type="button"
+          onClick={() => onChange(Math.max(min, value - 1))}
+          className="size-6 flex items-center justify-center text-muted-foreground/60 hover:text-foreground transition-colors rounded-full hover:bg-muted"
+        >
+          <Minus className="size-2.5" />
+        </button>
+        <span className="w-8 text-center text-xs font-medium tabular-nums select-none">
+          {value === 0 ? autoLabel : value}
+        </span>
+        <button
+          type="button"
+          onClick={() => onChange(Math.min(max, value + 1))}
+          className="size-6 flex items-center justify-center text-muted-foreground/60 hover:text-foreground transition-colors rounded-full hover:bg-muted"
+        >
+          <Plus className="size-2.5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function SceneCountPopover({
+  counts,
+  onChange,
+  pillCls,
+  pillMuted,
+  pillActive,
+}: {
+  counts: SceneCountConfig;
+  onChange: (c: SceneCountConfig) => void;
+  pillCls: string;
+  pillMuted: string;
+  pillActive: string;
+}) {
+  const slides = counts.slideCount ?? 0;
+  const quizzes = counts.quizCount ?? 0;
+  const questionsPerQuiz = counts.questionsPerQuiz ?? 0;
+  const interactives = counts.interactiveCount ?? 0;
+  const pbls = counts.pblCount ?? 0;
+
+  const hasCustom = slides > 0 || quizzes > 0 || questionsPerQuiz > 0 || interactives > 0 || pbls > 0;
+
+  const set = (patch: Partial<SceneCountConfig>) => onChange({ ...counts, ...patch });
+
+  return (
+    <Popover>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <PopoverTrigger asChild>
+            <button className={cn(pillCls, hasCustom ? pillActive : pillMuted)}>
+              <LayoutList className="size-3.5" />
+              {hasCustom && <span>场景数量</span>}
+            </button>
+          </PopoverTrigger>
+        </TooltipTrigger>
+        <TooltipContent>设置各类型场景的数量</TooltipContent>
+      </Tooltip>
+      <PopoverContent align="start" className="w-72 p-3 space-y-1">
+        <p className="text-xs font-semibold text-muted-foreground mb-2">场景数量设置 <span className="font-normal opacity-60">（0 = AI自动决定）</span></p>
+        <CounterRow
+          label="幻灯片 Slides"
+          value={slides}
+          onChange={(v) => set({ slideCount: v })}
+          max={30}
+        />
+        <div className="border-t border-border/30" />
+        <CounterRow
+          label="测验 Quiz"
+          value={quizzes}
+          onChange={(v) => set({ quizCount: v })}
+          max={10}
+        />
+        <CounterRow
+          label="每个测验题目数"
+          subLabel="应用于所有 Quiz"
+          value={questionsPerQuiz}
+          onChange={(v) => set({ questionsPerQuiz: v })}
+          max={20}
+        />
+        <div className="border-t border-border/30" />
+        <CounterRow
+          label="交互仿真 Interactive"
+          value={interactives}
+          onChange={(v) => set({ interactiveCount: v })}
+          max={5}
+        />
+        <div className="border-t border-border/30" />
+        <CounterRow
+          label="项目式学习 PBL"
+          value={pbls}
+          onChange={(v) => set({ pblCount: v })}
+          max={5}
+        />
+        {hasCustom && (
+          <button
+            onClick={() => onChange({})}
+            className="w-full mt-2 text-xs text-muted-foreground/60 hover:text-foreground transition-colors text-center py-1 rounded border border-dashed border-border/40 hover:border-border"
+          >
+            重置为全部自动
+          </button>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }
 

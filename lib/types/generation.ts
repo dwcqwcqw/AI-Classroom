@@ -59,6 +59,23 @@ export interface UploadedDocument {
 }
 
 /**
+ * User-specified scene count constraints.
+ * When provided, the LLM will follow these counts instead of auto-inferring them.
+ */
+export interface SceneCountConfig {
+  /** Total number of Slide scenes (0 = auto) */
+  slideCount?: number;
+  /** Total number of Quiz scenes (0 = auto) */
+  quizCount?: number;
+  /** Number of questions per Quiz scene (0 = auto, typically 3) */
+  questionsPerQuiz?: number;
+  /** Total number of Interactive Simulation scenes (0 = auto) */
+  interactiveCount?: number;
+  /** Total number of Project-Based Learning scenes (0 = auto) */
+  pblCount?: number;
+}
+
+/**
  * Simplified user requirements for course generation
  * All details (topic, duration, style, etc.) should be included in the requirement text
  */
@@ -68,6 +85,7 @@ export interface UserRequirements {
   userNickname?: string; // Student nickname for personalization
   userBio?: string; // Student background for personalization
   webSearch?: boolean; // Enable web search for richer context
+  sceneCounts?: SceneCountConfig; // Optional explicit scene count overrides
 }
 
 /**

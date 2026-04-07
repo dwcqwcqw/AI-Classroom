@@ -11,13 +11,17 @@ import {
   Globe,
   AlertCircle,
   RefreshCw,
+  Sparkles,
+  X,
 } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import { cn } from '@/lib/utils';
 import { ThumbnailSlide } from '@/components/slide-renderer/components/ThumbnailSlide';
 import { useStageStore, useCanvasStore } from '@/lib/store';
 import { useI18n } from '@/lib/hooks/use-i18n';
-import type { SceneType, SlideContent } from '@/lib/types/stage';
+import type { SceneType, Scene, SlideContent } from '@/lib/types/stage';
 import { PENDING_SCENE_ID } from '@/lib/store/stage';
+import { SceneRefineDialog } from '@/components/scene/scene-refine-dialog';
 
 interface SceneSidebarProps {
   readonly collapsed: boolean;
@@ -41,6 +45,7 @@ export function SceneSidebar({
   const { scenes, currentSceneId, setCurrentSceneId, generatingOutlines, generationStatus } =
     useStageStore();
   const failedOutlines = useStageStore.use.failedOutlines();
+  const stage = useStageStore((s) => s.stage);
 
   const phaseLabelMap: Record<string, string> = {
     content: '内容',
@@ -52,6 +57,7 @@ export function SceneSidebar({
   const viewportRatio = useCanvasStore.use.viewportRatio();
 
   const [retryingOutlineId, setRetryingOutlineId] = useState<string | null>(null);
+  const [refineScene, setRefineScene] = useState<Scene | null>(null);
 
   const handleRetryOutline = async (outlineId: string) => {
     if (!onRetryOutline) return;
@@ -174,7 +180,7 @@ export function SceneSidebar({
               >
                 {/* Scene Header */}
                 <div className="flex justify-between items-center px-2 pt-0.5">
-                  <div className="flex items-center gap-2 max-w-full">
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
                     <span
                       className={cn(
                         'text-[10px] font-black w-4 h-4 rounded-full flex items-center justify-center shrink-0',
@@ -197,6 +203,17 @@ export function SceneSidebar({
                       {scene.title}
                     </span>
                   </div>
+                  {/* AI Edit button — visible on hover */}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setRefineScene(scene);
+                    }}
+                    className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity ml-1 size-5 rounded-full flex items-center justify-center text-violet-500 dark:text-violet-400 hover:bg-violet-100 dark:hover:bg-violet-900/40"
+                    title="AI 编辑此场景"
+                  >
+                    <Sparkles className="size-3" />
+                  </button>
                 </div>
 
                 {/* Thumbnail */}
@@ -469,6 +486,30 @@ export function SceneSidebar({
         {/* Spacer to push toggle button area */}
         <div className="mt-auto" />
       </div>
+
+      {/* AI Refine Dialog panel — slides over the sidebar */}
+      <AnimatePresence>
+        {refineScene && (
+          <motion.div
+            key="refine-panel"
+            initial={{ x: '-100%', opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: '-100%', opacity: 0 }}
+            transition={{ duration: 0.25, ease: [0.25, 0.1, 0.25, 1] }}
+            className="absolute inset-0 z-50 flex flex-col"
+            style={{ width: sidebarWidth }}
+          >
+            <SceneRefineDialog
+              scene={refineScene}
+              stageInfo={{
+                name: stage?.name ?? '',
+                language: stage?.language ?? 'zh-CN',
+              }}
+              onClose={() => setRefineScene(null)}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

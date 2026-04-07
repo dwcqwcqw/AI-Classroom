@@ -177,8 +177,22 @@ export async function POST(req: NextRequest) {
     // Build teacher context from agents (if available)
     const teacherContext = formatTeacherPersonaForPrompt(agents);
 
+    // Build scene count constraint instructions if user specified them
+    const sc = requirements.sceneCounts;
+    const sceneCountConstraint = (() => {
+      if (!sc) return '';
+      const lines: string[] = [];
+      if ((sc.slideCount ?? 0) > 0) lines.push(`- 幻灯片 (slide) 场景数量：恰好 ${sc.slideCount} 个`);
+      if ((sc.quizCount ?? 0) > 0) lines.push(`- 测验 (quiz) 场景数量：恰好 ${sc.quizCount} 个`);
+      if ((sc.questionsPerQuiz ?? 0) > 0) lines.push(`- 每个测验的题目数量：恰好 ${sc.questionsPerQuiz} 题（在 quizConfig.questionCount 中体现）`);
+      if ((sc.interactiveCount ?? 0) > 0) lines.push(`- 交互仿真 (interactive) 场景数量：恰好 ${sc.interactiveCount} 个`);
+      if ((sc.pblCount ?? 0) > 0) lines.push(`- 项目式学习 (pbl) 场景数量：恰好 ${sc.pblCount} 个`);
+      if (lines.length === 0) return '';
+      return `\n\n## 用户指定的场景数量约束（必须严格遵守）\n\n${lines.join('\n')}\n\n以上约束优先级高于根据课程时长自动推断，请严格按照要求生成指定数量的场景。`;
+    })();
+
     const prompts = buildPrompt(PROMPT_IDS.REQUIREMENTS_TO_OUTLINES, {
-      requirement: requirements.requirement,
+      requirement: requirements.requirement + sceneCountConstraint,
       language: requirements.language,
       pdfContent: pdfText
         ? pdfText.substring(0, MAX_PDF_CONTENT_CHARS)

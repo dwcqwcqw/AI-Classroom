@@ -167,6 +167,7 @@ export interface SettingsState {
   maxTurns: string;
   agentMode: 'preset' | 'auto';
   autoAgentCount: number;
+  agentCustomPrompt: string; // User's custom instruction for AI agent generation
 
   // Layout preferences (persisted via localStorage)
   sidebarCollapsed: boolean;
@@ -186,6 +187,7 @@ export interface SettingsState {
   setMaxTurns: (turns: string) => void;
   setAgentMode: (mode: 'preset' | 'auto') => void;
   setAutoAgentCount: (count: number) => void;
+  setAgentCustomPrompt: (prompt: string) => void;
 
   // Layout actions
   setSidebarCollapsed: (collapsed: boolean) => void;
@@ -566,6 +568,7 @@ export const useSettingsStore = create<SettingsState>()(
         maxTurns: migratedData?.maxTurns?.toString() || '10',
         agentMode: 'auto' as const,
         autoAgentCount: 3,
+        agentCustomPrompt: '',
 
         // Playback controls
         ttsMuted: false,
@@ -634,6 +637,7 @@ export const useSettingsStore = create<SettingsState>()(
         setMaxTurns: (turns) => set({ maxTurns: turns }),
         setAgentMode: (mode) => set({ agentMode: mode }),
         setAutoAgentCount: (count) => set({ autoAgentCount: count }),
+        setAgentCustomPrompt: (prompt) => set({ agentCustomPrompt: prompt }),
 
         // Layout actions
         setSidebarCollapsed: (collapsed) => set({ sidebarCollapsed: collapsed }),

@@ -32,7 +32,7 @@ import { AgentBar } from '@/components/agent/agent-bar';
 import { useTheme } from '@/lib/hooks/use-theme';
 import { nanoid } from 'nanoid';
 import { storePdfBlob } from '@/lib/utils/image-storage';
-import type { UserRequirements } from '@/lib/types/generation';
+import type { UserRequirements, SceneCountConfig } from '@/lib/types/generation';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useUserProfileStore, AVATAR_OPTIONS } from '@/lib/store/user-profile';
 import {
@@ -61,6 +61,7 @@ interface FormState {
   requirement: string;
   language: 'zh-CN' | 'en-US';
   webSearch: boolean;
+  sceneCounts: SceneCountConfig;
 }
 
 const initialFormState: FormState = {
@@ -68,6 +69,7 @@ const initialFormState: FormState = {
   requirement: '',
   language: 'zh-CN',
   webSearch: false,
+  sceneCounts: {},
 };
 
 function HomePage() {
@@ -278,12 +280,14 @@ function HomePage() {
 
     try {
       const userProfile = useUserProfileStore.getState();
+      const hasCustomCounts = Object.values(form.sceneCounts).some((v) => (v ?? 0) > 0);
       const requirements: UserRequirements = {
         requirement: form.requirement,
         language: form.language,
         userNickname: userProfile.nickname || undefined,
         userBio: userProfile.bio || undefined,
         webSearch: form.webSearch || undefined,
+        sceneCounts: hasCustomCounts ? form.sceneCounts : undefined,
       };
 
       let pdfStorageKey: string | undefined;
@@ -572,6 +576,8 @@ function HomePage() {
                   pdfFile={form.pdfFile}
                   onPdfFileChange={(f) => updateForm('pdfFile', f)}
                   onPdfError={setError}
+                  sceneCounts={form.sceneCounts}
+                  onSceneCountsChange={(counts) => updateForm('sceneCounts', counts)}
                 />
               </div>
 

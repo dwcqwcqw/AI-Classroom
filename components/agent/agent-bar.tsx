@@ -21,6 +21,7 @@ import {
   MessageSquare,
   Minus,
   Plus,
+  PenLine,
 } from 'lucide-react';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { AgentConfig } from '@/lib/orchestration/registry/types';
@@ -479,6 +480,8 @@ export function AgentBar() {
   const setMaxTurns = useSettingsStore((s) => s.setMaxTurns);
   const agentMode = useSettingsStore((s) => s.agentMode);
   const setAgentMode = useSettingsStore((s) => s.setAgentMode);
+  const agentCustomPrompt = useSettingsStore((s) => s.agentCustomPrompt);
+  const setAgentCustomPrompt = useSettingsStore((s) => s.setAgentCustomPrompt);
   const ttsProvidersConfig = useSettingsStore((s) => s.ttsProvidersConfig);
   const ttsEnabled = useSettingsStore((s) => s.ttsEnabled);
 
@@ -779,20 +782,46 @@ export function AgentBar() {
                     .map((agent, idx) => renderAgentRow(agent, idx + 1, false))}
                 </div>
               ) : (
-                <div className="flex flex-col items-center pt-6 pb-3 gap-4">
-                  <div className="relative flex items-center justify-center">
-                    <div className="absolute size-10 rounded-full bg-violet-400/10 dark:bg-violet-400/15 animate-ping [animation-duration:3s]" />
-                    <div className="absolute size-12 rounded-full bg-violet-400/5 dark:bg-violet-400/10 animate-pulse [animation-duration:2.5s]" />
-                    <Shuffle className="relative size-5 text-violet-400 dark:text-violet-500" />
+                <div className="flex flex-col gap-3 pt-3 pb-1">
+                  {/* Icon + description row */}
+                  <div className="flex items-center gap-2.5 px-1">
+                    <div className="relative flex items-center justify-center shrink-0">
+                      <div className="absolute size-8 rounded-full bg-violet-400/10 dark:bg-violet-400/15 animate-ping [animation-duration:3s]" />
+                      <Shuffle className="relative size-4 text-violet-400 dark:text-violet-500" />
+                    </div>
+                    <div className="space-y-0.5">
+                      <p className="text-[11px] text-muted-foreground/70">
+                        {t('settings.agentModeAutoDesc')}
+                      </p>
+                      <p className="text-[10px] text-muted-foreground/40">
+                        {t('agentBar.voiceAutoAssign')}
+                      </p>
+                    </div>
                   </div>
-                  <div className="flex-1" />
-                  <div className="text-center space-y-1">
-                    <p className="text-[11px] text-muted-foreground/60">
-                      {t('settings.agentModeAutoDesc')}
-                    </p>
-                    <p className="text-[10px] text-muted-foreground/40">
-                      {t('agentBar.voiceAutoAssign')}
-                    </p>
+
+                  {/* Custom instruction textarea */}
+                  <div className="space-y-1 px-1">
+                    <div className="flex items-center gap-1 text-[11px] text-muted-foreground/60">
+                      <PenLine className="size-3" />
+                      <span>自定义 Agent 生成指令（可选）</span>
+                    </div>
+                    <textarea
+                      value={agentCustomPrompt}
+                      onChange={(e) => setAgentCustomPrompt(e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      placeholder={`例如：\n- 生成一个严格型数学老师\n- 包含一个活泼的女学生助手\n- 使用偏学术风格的角色设定`}
+                      rows={4}
+                      className="w-full resize-none rounded-lg border border-border/50 bg-muted/30 px-2.5 py-2 text-[12px] leading-relaxed placeholder:text-muted-foreground/30 focus:outline-none focus:ring-1 focus:ring-violet-400/60 transition-colors"
+                    />
+                    {agentCustomPrompt.trim() && (
+                      <button
+                        onClick={() => setAgentCustomPrompt('')}
+                        className="text-[10px] text-muted-foreground/40 hover:text-muted-foreground/70 transition-colors"
+                      >
+                        清除
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
