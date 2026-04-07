@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Sparkles,
   X,
+  Trash2,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { cn } from '@/lib/utils';
@@ -56,8 +57,28 @@ export function SceneSidebar({
   const viewportSize = useCanvasStore.use.viewportSize();
   const viewportRatio = useCanvasStore.use.viewportRatio();
 
+  const deleteScene = useStageStore((s) => s.deleteScene);
+
   const [retryingOutlineId, setRetryingOutlineId] = useState<string | null>(null);
   const [refineScene, setRefineScene] = useState<Scene | null>(null);
+  // Track which scene is pending delete confirmation (first click arms, second click fires)
+  const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
+  const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleDeleteClick = (e: React.MouseEvent, sceneId: string) => {
+    e.stopPropagation();
+    if (pendingDeleteId === sceneId) {
+      // Second click — confirm delete
+      if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
+      setPendingDeleteId(null);
+      deleteScene(sceneId);
+    } else {
+      // First click — arm
+      if (deleteTimerRef.current) clearTimeout(deleteTimerRef.current);
+      setPendingDeleteId(sceneId);
+      deleteTimerRef.current = setTimeout(() => setPendingDeleteId(null), 2000);
+    }
+  };
 
   const handleRetryOutline = async (outlineId: string) => {
     if (!onRetryOutline) return;
@@ -203,17 +224,31 @@ export function SceneSidebar({
                       {scene.title}
                     </span>
                   </div>
-                  {/* AI Edit button — visible on hover */}
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setRefineScene(scene);
-                    }}
-                    className="shrink-0 opacity-0 group-hover:opacity-100 transition-opacity ml-1 size-5 rounded-full flex items-center justify-center text-violet-500 dark:text-violet-400 hover:bg-violet-100 dark:hover:bg-violet-900/40"
-                    title="AI 编辑此场景"
-                  >
-                    <Sparkles className="size-3" />
-                  </button>
+                  {/* Action buttons — visible on hover */}
+                  <div className="flex items-center gap-0.5 shrink-0 ml-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setRefineScene(scene);
+                      }}
+                      className="size-5 rounded-full flex items-center justify-center text-violet-500 dark:text-violet-400 hover:bg-violet-100 dark:hover:bg-violet-900/40 transition-colors"
+                      title="AI 编辑此场景"
+                    >
+                      <Sparkles className="size-3" />
+                    </button>
+                    <button
+                      onClick={(e) => handleDeleteClick(e, scene.id)}
+                      className={cn(
+                        'size-5 rounded-full flex items-center justify-center transition-colors',
+                        pendingDeleteId === scene.id
+                          ? 'bg-red-500 text-white animate-pulse'
+                          : 'text-gray-400 dark:text-gray-500 hover:bg-red-100 dark:hover:bg-red-900/40 hover:text-red-500',
+                      )}
+                      title={pendingDeleteId === scene.id ? '再次点击确认删除' : '删除此场景'}
+                    >
+                      <Trash2 className="size-3" />
+                    </button>
+                  </div>
                 </div>
 
                 {/* Thumbnail */}

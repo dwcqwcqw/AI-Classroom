@@ -89,7 +89,8 @@ export async function POST(req: NextRequest) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'scene and instruction are required');
     }
 
-    const { model: languageModel, modelInfo } = resolveModelFromHeaders(req);
+    const { model: languageModel, modelInfo, modelString } = resolveModelFromHeaders(req);
+    log.info(`Scene refine: scene="${scene.title}", model=${modelString}`);
     const lang = stageInfo?.language ?? 'zh-CN';
 
     const historyText =

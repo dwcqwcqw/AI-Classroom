@@ -32,10 +32,13 @@ interface SceneActionsResult {
 
 const GENERATION_MAX_RETRIES = 2;
 // Per-request fetch timeout.
-// scene-content route: maxDuration=300s (heavy, keep 80s client timeout)
+// scene-content route: maxDuration=300s
+//   - slide/quiz/pbl: 80s is enough
+//   - interactive: does TWO sequential LLM calls (scientific model + HTML), needs 200s
 // scene-actions route: maxDuration=60s (lighter, keep 50s client timeout)
 // tts route: maxDuration=30s, keep 25s client timeout
 const FETCH_TIMEOUT_CONTENT_MS = 80_000;
+const FETCH_TIMEOUT_CONTENT_INTERACTIVE_MS = 200_000;
 const FETCH_TIMEOUT_ACTIONS_MS = 50_000;
 const FETCH_TIMEOUT_TTS_MS = 25_000;
 
@@ -123,6 +126,11 @@ async function fetchSceneContent(
 ): Promise<SceneContentResult> {
   const maxAttempts = GENERATION_MAX_RETRIES + 1;
   let lastError = '';
+  // Interactive scenes run two sequential LLM calls on the server — need a longer client timeout
+  const contentTimeoutMs =
+    params.outline.type === 'interactive'
+      ? FETCH_TIMEOUT_CONTENT_INTERACTIVE_MS
+      : FETCH_TIMEOUT_CONTENT_MS;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -130,7 +138,7 @@ async function fetchSceneContent(
         method: 'POST',
         headers: getApiHeaders(),
         body: JSON.stringify(params),
-        signal: withTimeout(signal, FETCH_TIMEOUT_CONTENT_MS),
+        signal: withTimeout(signal, contentTimeoutMs),
       });
 
       if (!response.ok) {

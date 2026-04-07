@@ -115,9 +115,21 @@ export function SceneRefineDialog({ scene, stageInfo, onClose }: SceneRefineDial
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
-      let streamedText = '';
+      // Track whether a terminal event (done / error) has been received
+      let terminalReceived = false;
 
-      while (true) {
+      const finishStreaming = (content: string) => {
+        setMessages((prev) => {
+          const next = [...prev];
+          const last = next[next.length - 1];
+          if (last?.isStreaming) {
+            next[next.length - 1] = { role: 'assistant', content, isStreaming: false };
+          }
+          return next;
+        });
+      };
+
+      outer: while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
@@ -129,81 +141,44 @@ export function SceneRefineDialog({ scene, stageInfo, onClose }: SceneRefineDial
           const json = line.slice(6).trim();
           if (!json) continue;
 
+          let event: { type: string; text?: string; scene?: Scene; error?: string };
           try {
-            const event = JSON.parse(json) as {
-              type: string;
-              text?: string;
-              scene?: Scene;
-              parsed?: unknown;
-              error?: string;
-            };
+            event = JSON.parse(json);
+          } catch {
+            // Malformed SSE line — skip silently
+            continue;
+          }
 
-            if (event.type === 'chunk' && event.text) {
-              streamedText += event.text;
-              setMessages((prev) => {
-                const next = [...prev];
-                const last = next[next.length - 1];
-                if (last?.isStreaming) {
-                  // Show a friendly message while streaming
-                  next[next.length - 1] = {
-                    ...last,
-                    content: '正在重新生成场景内容...',
-                  };
-                }
-                return next;
-              });
-            } else if (event.type === 'done' && event.scene) {
-              // Apply the updated scene to the stage store (full replace)
-              updateScene(event.scene.id, event.scene as Partial<Scene>);
-              setAppliedCount((c) => c + 1);
-              setMessages((prev) => {
-                const next = [...prev];
-                const last = next[next.length - 1];
-                if (last?.isStreaming) {
-                  next[next.length - 1] = {
-                    role: 'assistant',
-                    content: `✅ 场景已更新！修改内容已实时应用到「${event.scene!.title}」。\n\n如需进一步调整，请继续告诉我。`,
-                    isStreaming: false,
-                  };
-                }
-                return next;
-              });
-            } else if (event.type === 'done_raw') {
-              setMessages((prev) => {
-                const next = [...prev];
-                const last = next[next.length - 1];
-                if (last?.isStreaming) {
-                  next[next.length - 1] = {
-                    role: 'assistant',
-                    content: `AI 生成了更新内容，但无法自动应用（场景结构不匹配）。请尝试更具体的指令。`,
-                    isStreaming: false,
-                  };
-                }
-                return next;
-              });
-            } else if (event.type === 'error') {
-              throw new Error(event.error || 'Unknown error');
-            }
-          } catch (parseErr) {
-            // Ignore malformed SSE lines
-            log.warn('SSE parse error:', parseErr);
+          if (event.type === 'chunk' && event.text) {
+            setMessages((prev) => {
+              const next = [...prev];
+              const last = next[next.length - 1];
+              if (last?.isStreaming) {
+                next[next.length - 1] = { ...last, content: '正在重新生成场景内容...' };
+              }
+              return next;
+            });
+          } else if (event.type === 'done' && event.scene) {
+            updateScene(event.scene.id, event.scene as Partial<Scene>);
+            setAppliedCount((c) => c + 1);
+            finishStreaming(
+              `✅ 场景已更新！修改内容已实时应用到「${event.scene.title}」。\n\n如需进一步调整，请继续告诉我。`,
+            );
+            terminalReceived = true;
+            break outer;
+          } else if (event.type === 'error') {
+            // Application-level error from the server — surface it to the user
+            finishStreaming(`出错了：${event.error || '服务器返回未知错误'}`);
+            terminalReceived = true;
+            break outer;
           }
         }
       }
 
-      // Fallback if no done event was received
-      setMessages((prev) => {
-        const next = [...prev];
-        const last = next[next.length - 1];
-        if (last?.isStreaming) {
-          next[next.length - 1] = {
-            role: 'assistant',
-            content: streamedText || '操作完成。',
-            isStreaming: false,
-          };
-        }
-        return next;
-      });
+      // Fallback: stream ended without a terminal event
+      if (!terminalReceived) {
+        finishStreaming('操作完成。');
+      }
     } catch (err) {
       if ((err as Error).name === 'AbortError') return;
       log.error('Scene refine error:', err);
