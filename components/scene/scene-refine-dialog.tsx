@@ -28,7 +28,7 @@ interface ChatMessage {
 
 interface SceneRefineDialogProps {
   scene: Scene;
-  stageInfo: { name: string; language?: string };
+  stageInfo: { name: string; language?: string; style?: string };
   onClose: () => void;
 }
 
@@ -141,7 +141,7 @@ export function SceneRefineDialog({ scene, stageInfo, onClose }: SceneRefineDial
           const json = line.slice(6).trim();
           if (!json) continue;
 
-          let event: { type: string; text?: string; scene?: Scene; error?: string };
+          let event: { type: string; text?: string; message?: string; scene?: Scene; error?: string };
           try {
             event = JSON.parse(json);
           } catch {
@@ -149,12 +149,13 @@ export function SceneRefineDialog({ scene, stageInfo, onClose }: SceneRefineDial
             continue;
           }
 
-          if (event.type === 'chunk' && event.text) {
+          if (event.type === 'status' && event.message) {
+            // Progress update — show in the streaming bubble
             setMessages((prev) => {
               const next = [...prev];
               const last = next[next.length - 1];
               if (last?.isStreaming) {
-                next[next.length - 1] = { ...last, content: '正在重新生成场景内容...' };
+                next[next.length - 1] = { ...last, content: event.message! };
               }
               return next;
             });

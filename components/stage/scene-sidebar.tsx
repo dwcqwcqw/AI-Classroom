@@ -539,6 +539,7 @@ export function SceneSidebar({
               stageInfo={{
                 name: stage?.name ?? '',
                 language: stage?.language ?? 'zh-CN',
+                style: stage?.style ?? '',
               }}
               onClose={() => setRefineScene(null)}
             />

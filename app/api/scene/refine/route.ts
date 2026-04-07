@@ -1,22 +1,34 @@
 /**
  * Scene Refinement API
  *
- * Accepts an existing Scene + user instruction and streams an LLM response
- * that produces an updated Scene (partial patch). The patch is merged
- * back into the original scene on the client side.
+ * Accepts an existing Scene + user instruction, then:
+ *  1. Streams an immediate acknowledgment to the client so the user knows
+ *     the AI understood and is working.
+ *  2. Reconstructs a SceneOutline from the existing scene with the user
+ *     instruction injected as additional context.
+ *  3. Calls the exact same generateSceneContent + generateSceneActions
+ *     pipeline that generates scenes during normal course creation.
+ *  4. Streams the completed updated Scene back.
+ *
+ * Using the existing pipeline guarantees structurally valid canvas/quiz JSON
+ * and avoids the LLM producing malformed raw slide structures.
  *
  * POST /api/scene/refine
  * Body: { scene, instruction, history, stageInfo }
- * Returns: SSE stream with { type: 'chunk'|'done'|'error', ... }
+ * Returns: SSE  { type:'status'|'done'|'error', ... }
  */
 
 import { NextRequest } from 'next/server';
-import { streamLLM } from '@/lib/ai/llm';
-import { parseJsonResponse } from '@/lib/generation/json-repair';
+import { callLLM } from '@/lib/ai/llm';
+import { generateSceneContent, generateSceneActions } from '@/lib/generation/scene-generator';
+import { applyOutlineFallbacks } from '@/lib/generation/outline-generator';
+import { buildCompleteScene } from '@/lib/generation/scene-builder';
 import { resolveModelFromHeaders } from '@/lib/server/resolve-model';
 import { apiError } from '@/lib/server/api-response';
 import { createLogger } from '@/lib/logger';
-import type { Scene } from '@/lib/types/stage';
+import type { Scene, SlideContent, QuizContent } from '@/lib/types/stage';
+import type { SceneOutline } from '@/lib/types/generation';
+import type { AgentInfo } from '@/lib/generation/pipeline-types';
 
 const log = createLogger('scene-refine');
 
@@ -31,102 +43,74 @@ interface RequestBody {
   scene: Scene;
   instruction: string;
   history: ChatMessage[];
-  stageInfo: { name: string; language?: string };
+  stageInfo: { name: string; language?: string; style?: string };
+  agents?: AgentInfo[];
 }
 
-/** Convert scene content to a compact readable summary for the LLM */
-function describeScene(scene: Scene): string {
-  const lines: string[] = [`Title: ${scene.title}`, `Type: ${scene.type}`];
+/** Build a SceneOutline from an existing scene, injecting the user instruction */
+function buildOutlineFromScene(
+  scene: Scene,
+  instruction: string,
+  history: ChatMessage[],
+  stageInfo: { name?: string; language?: string },
+): SceneOutline {
+  const lang = (stageInfo?.language ?? 'zh-CN') as 'zh-CN' | 'en-US';
 
-  const contentAny = scene.content as unknown as Record<string, unknown>;
-
+  // Gather existing key points from slide text content
+  const keyPoints: string[] = [];
   if (scene.type === 'slide') {
-    const canvas = contentAny?.canvas as Record<string, unknown> | undefined;
-    const elements = (canvas?.elements as unknown[]) ?? [];
-    lines.push(`Slide elements (${elements.length}):`);
-    for (const raw of elements) {
-      const el = raw as Record<string, unknown>;
-      if (el.type === 'text') {
-        const text = String(el.content || '').replace(/<[^>]*>/g, '').substring(0, 100);
-        lines.push(`  - [text] "${text}"`);
-      } else if (el.type === 'image') {
-        lines.push(`  - [image]`);
-      } else {
-        lines.push(`  - [${el.type}]`);
+    const canvas = (scene.content as SlideContent).canvas;
+    for (const el of canvas?.elements ?? []) {
+      const e = el as unknown as Record<string, unknown>;
+      if (e.type === 'text') {
+        const text = String(e.content ?? '').replace(/<[^>]*>/g, '').trim().substring(0, 80);
+        if (text) keyPoints.push(text);
       }
     }
   } else if (scene.type === 'quiz') {
-    const questions = (contentAny?.questions as { question: string }[]) ?? [];
-    lines.push(`Quiz (${questions.length} questions):`);
-    questions.forEach((q, i) => lines.push(`  ${i + 1}. ${q.question}`));
-  } else if (scene.type === 'interactive') {
-    lines.push('Interactive HTML simulation');
-  } else if (scene.type === 'pbl') {
-    lines.push('Project-Based Learning scene');
+    const questions = (scene.content as QuizContent).questions ?? [];
+    questions.forEach((q) => keyPoints.push(q.question.substring(0, 80)));
   }
 
-  const speeches = (scene.actions ?? [])
-    .filter((a) => {
-      const any = a as unknown as Record<string, unknown>;
-      return a.type === 'speech' && any.text;
-    })
-    .slice(0, 3)
-    .map((a) => String((a as unknown as Record<string, unknown>).text).substring(0, 80));
-  if (speeches.length) {
-    lines.push('Lecture speeches (sample):');
-    speeches.forEach((s) => lines.push(`  - "${s}"`));
-  }
+  // Build history context string
+  const historyCtx = history.length > 0
+    ? history
+        .slice(-4)
+        .map((m) => `${m.role === 'user' ? 'User' : 'AI'}: ${m.content}`)
+        .join('\n')
+    : '';
 
-  return lines.join('\n');
+  // Inject the user instruction into the description so the generator knows what to change
+  const instructionBlock = historyCtx
+    ? `Previous edits:\n${historyCtx}\nNew instruction: ${instruction}`
+    : `User instruction: ${instruction}`;
+
+  return {
+    id: scene.id,
+    type: scene.type,
+    title: scene.title,
+    description: `${instructionBlock}\n\n(Refining existing scene — keep all correct content, only apply the changes requested above)`,
+    keyPoints: keyPoints.slice(0, 8),
+    order: scene.order,
+    language: lang,
+    // Preserve interactiveConfig if present
+    ...(scene.type === 'interactive' && (scene.content as unknown as Record<string, unknown>).interactiveConfig
+      ? { interactiveConfig: (scene.content as unknown as Record<string, unknown>).interactiveConfig as SceneOutline['interactiveConfig'] }
+      : {}),
+  };
 }
 
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as RequestBody;
-    const { scene, instruction, history, stageInfo } = body;
+    const { scene, instruction, history, stageInfo, agents } = body;
 
     if (!scene || !instruction?.trim()) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'scene and instruction are required');
     }
 
     const { model: languageModel, modelInfo, modelString } = resolveModelFromHeaders(req);
-    log.info(`Scene refine: scene="${scene.title}", model=${modelString}`);
-    const lang = stageInfo?.language ?? 'zh-CN';
-
-    const historyText =
-      history.length > 0
-        ? history
-            .slice(-6)
-            .map((m) => `${m.role === 'user' ? 'User' : 'Assistant'}: ${m.content}`)
-            .join('\n') + '\n---\n'
-        : '';
-
-    const systemPrompt = `You are an AI course-slide editor. The teacher wants to modify one scene in their course.
-Your task: analyse the current scene data and the user's instruction, then output the FULL updated scene as JSON.
-
-Course name: "${stageInfo.name}"
-Language: ${lang}
-
-## Current scene
-${describeScene(scene)}
-
-## Output format (strict JSON, no markdown fences)
-Return a JSON object that is a PARTIAL update — include only the fields you want to change:
-{
-  "title": "...",          // optional — new title
-  "content": { ... },      // optional — updated content object (same shape as original)
-  "actions": [ ... ]       // optional — updated actions array
-}
-
-Rules:
-- Keep the scene type: ${scene.type}
-- Keep all speech text in ${lang}
-- For slides: "content.canvas.elements" is the array of PPT elements
-- For quizzes: "content.questions" is the array of { question, options, answer, explanation }
-- Only modify what the user asks; preserve everything else
-- Return ONLY valid JSON, no explanation`;
-
-    const userMessage = `${historyText}Instruction: ${instruction}`;
+    log.info(`Scene refine: scene="${scene.title}" type=${scene.type} model=${modelString}`);
 
     const encoder = new TextEncoder();
 
@@ -136,51 +120,88 @@ Rules:
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(data)}\n\n`));
 
         try {
-          const result = streamLLM(
-            {
-              model: languageModel,
-              system: systemPrompt,
-              prompt: userMessage,
-              maxOutputTokens: modelInfo?.outputWindow,
-            },
-            'scene-refine',
+          // ── Step 1: Stream an immediate status so the user sees instant feedback ──
+          enqueue({ type: 'status', message: `好的，我来根据你的指令修改「${scene.title}」，请稍候…` });
+
+          // ── Step 2: Build a modified outline from the existing scene ──
+          const rawOutline = buildOutlineFromScene(scene, instruction, history, stageInfo ?? {});
+          const outline = applyOutlineFallbacks(rawOutline, !!languageModel);
+
+          // ── Step 3: AI call wrapper (same pattern as scene-content route) ──
+          const aiCall = async (systemPrompt: string, userPrompt: string): Promise<string> => {
+            const result = await callLLM(
+              {
+                model: languageModel,
+                system: systemPrompt,
+                prompt: userPrompt,
+                maxOutputTokens: modelInfo?.outputWindow,
+              },
+              'scene-refine',
+            );
+            return result.text;
+          };
+
+          // ── Step 4: Regenerate content using the proven pipeline ──
+          enqueue({ type: 'status', message: '正在重新生成场景内容…' });
+
+          const newContent = await generateSceneContent(
+            outline,
+            aiCall,
+            undefined,  // no PDF images for refinement
+            undefined,  // no imageMapping
+            undefined,  // no languageModel override (PBL path)
+            false,      // visionEnabled = false for refinement
+            {},         // generatedMediaMapping
+            agents,
           );
 
-          let fullText = '';
-          for await (const chunk of result.textStream) {
-            fullText += chunk;
-            enqueue({ type: 'chunk', text: chunk });
-          }
-
-          const patch = parseJsonResponse<{
-            title?: string;
-            content?: Record<string, unknown>;
-            actions?: unknown[];
-          }>(fullText);
-
-          if (!patch) {
-            enqueue({ type: 'error', error: 'LLM did not return valid JSON' });
+          if (!newContent) {
+            enqueue({ type: 'error', error: `内容生成失败，请重试。(model=${modelString})` });
             controller.close();
             return;
           }
 
-          // Deep-merge the patch into the original scene
-          const originalContent = scene.content as unknown as Record<string, unknown>;
-          const updatedScene: Scene = {
-            ...scene,
-            ...(patch.title ? { title: patch.title } : {}),
-            content: patch.content
-              ? ({ ...originalContent, ...patch.content } as unknown as Scene['content'])
-              : scene.content,
-            actions: patch.actions
-              ? (patch.actions as unknown as Scene['actions'])
-              : scene.actions,
-            updatedAt: Date.now(),
+          // ── Step 5: Regenerate actions (speech, spotlight, etc.) ──
+          enqueue({ type: 'status', message: '正在生成讲解脚本…' });
+
+          const previousSpeeches: string[] = (scene.actions ?? [])
+            .filter((a) => {
+              const any = a as unknown as Record<string, unknown>;
+              return a.type === 'speech' && any.text;
+            })
+            .slice(0, 2)
+            .map((a) => String((a as unknown as Record<string, unknown>).text).substring(0, 60));
+
+          const ctx: import('@/lib/generation/pipeline-types').SceneGenerationContext = {
+            pageIndex: scene.order,
+            totalPages: 1,
+            allTitles: [scene.title],
+            previousSpeeches,
           };
 
-          enqueue({ type: 'done', scene: updatedScene });
+          const newActions = await generateSceneActions(
+            outline,
+            newContent,
+            aiCall,
+            ctx,
+            agents,
+          );
+
+          // ── Step 6: Build the complete Scene object ──
+          const builtScene = buildCompleteScene(outline, newContent, newActions ?? [], scene.stageId);
+
+          if (!builtScene) {
+            enqueue({ type: 'error', error: '场景构建失败，请重试。' });
+            controller.close();
+            return;
+          }
+
+          // Preserve original scene ID so the store update is an in-place replace
+          builtScene.id = scene.id;
+
+          enqueue({ type: 'done', scene: builtScene });
         } catch (err) {
-          log.error('Scene refine stream error:', err);
+          log.error('Scene refine error:', err);
           enqueue({ type: 'error', error: err instanceof Error ? err.message : String(err) });
         } finally {
           controller.close();
