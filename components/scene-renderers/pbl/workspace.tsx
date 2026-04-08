@@ -32,13 +32,13 @@ export function PBLWorkspace({
   });
 
   return (
-    <div className="flex h-full w-full">
+    <div className="flex h-full w-full min-h-0 flex-col md:flex-row">
       {/* Left: Issueboard (~35%) */}
-      <div className="w-[35%] min-w-[280px] border-r overflow-hidden flex flex-col">
+      <div className="flex min-h-0 w-full max-h-[46%] flex-col overflow-hidden border-b md:max-h-none md:w-[35%] md:min-w-[280px] md:border-b-0 md:border-r">
         {/* Back button bar */}
-        <div className="px-3 pt-2 flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-1.5 px-3 pt-2">
           {!showConfirm ? (
-            <div className="flex items-center gap-1 flex-1">
+            <div className="flex min-w-0 flex-1 items-center gap-1">
               <button
                 onClick={() => setShowConfirm(true)}
                 className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors px-1.5 py-1 rounded-md hover:bg-muted"
@@ -46,12 +46,12 @@ export function PBLWorkspace({
                 <ArrowLeft className="w-3.5 h-3.5" />
                 <span>{t('pbl.workspace.restart')}</span>
               </button>
-              <div className="ml-auto">
+              <div className="ml-auto shrink-0">
                 <PBLGuidePanel />
               </div>
             </div>
           ) : (
-            <div className="flex items-center gap-1.5 text-xs">
+            <div className="flex flex-wrap items-center gap-1.5 text-xs">
               <span className="text-muted-foreground">{t('pbl.workspace.confirmRestart')}</span>
               <button
                 onClick={() => {
@@ -78,7 +78,7 @@ export function PBLWorkspace({
       </div>
 
       {/* Right: Chat (~65%) */}
-      <div className="flex-1 overflow-hidden">
+      <div className="min-h-0 flex-1 overflow-hidden">
         <ChatPanel
           messages={messages}
           currentIssue={currentIssue}

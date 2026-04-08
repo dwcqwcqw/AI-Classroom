@@ -37,7 +37,8 @@ export function InteractiveRenderer({ content, mode: _mode, sceneId }: Interacti
  * - Canvas elements use container sizing instead of viewport
  */
 function patchHtmlForIframe(html: string): string {
-  const iframeCss = `<style data-iframe-patch>
+  const iframeHeadPatch = `<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<style data-iframe-patch>
   html, body {
     width: 100%;
     height: 100%;
@@ -45,17 +46,29 @@ function patchHtmlForIframe(html: string): string {
     padding: 0;
     overflow-x: hidden;
     overflow-y: auto;
+    -webkit-text-size-adjust: 100%;
   }
   /* Fix min-h-screen: in iframes 100vh is the iframe height, which is correct,
      but ensure body actually fills it */
   body { min-height: 100vh; }
+  *, *::before, *::after { box-sizing: border-box; }
+  body > * {
+    max-width: 100%;
+  }
+  img, video, svg, canvas {
+    max-width: 100%;
+  }
+  .min-h-screen, .h-screen {
+    min-height: 100%;
+    height: 100%;
+  }
 </style>`;
 
   // Insert right after <head> or at the start of the document
   const headIdx = html.indexOf('<head>');
   if (headIdx !== -1) {
     const insertPos = headIdx + 6; // after <head>
-    return html.substring(0, insertPos) + '\n' + iframeCss + html.substring(insertPos);
+    return html.substring(0, insertPos) + '\n' + iframeHeadPatch + html.substring(insertPos);
   }
 
   const headWithAttrs = html.indexOf('<head ');
@@ -63,10 +76,10 @@ function patchHtmlForIframe(html: string): string {
     const closeAngle = html.indexOf('>', headWithAttrs);
     if (closeAngle !== -1) {
       const insertPos = closeAngle + 1;
-      return html.substring(0, insertPos) + '\n' + iframeCss + html.substring(insertPos);
+      return html.substring(0, insertPos) + '\n' + iframeHeadPatch + html.substring(insertPos);
     }
   }
 
   // Fallback: prepend
-  return iframeCss + html;
+  return iframeHeadPatch + html;
 }
