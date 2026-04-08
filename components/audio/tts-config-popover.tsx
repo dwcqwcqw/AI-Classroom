@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useMemo } from 'react';
-import { Volume2, Play, Loader2 } from 'lucide-react';
+import { Volume2, Play, Loader2, CloudUpload } from 'lucide-react';
 import { toast } from 'sonner';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
@@ -18,6 +18,7 @@ import { useI18n } from '@/lib/hooks/use-i18n';
 import { useSettingsStore } from '@/lib/store/settings';
 import { getTTSVoices } from '@/lib/audio/constants';
 import { useTTSPreview } from '@/lib/audio/use-tts-preview';
+import { migrateLocalAudioToR2, type AudioMigrationProgress } from '@/lib/audio/migrate-local-audio-to-r2';
 
 /** Extract the English name from voice name format "ChineseName (English)" */
 function getVoiceDisplayName(name: string, lang: string): string {
@@ -31,6 +32,8 @@ function getVoiceDisplayName(name: string, lang: string): string {
 export function TtsConfigPopover() {
   const { t, locale } = useI18n();
   const [open, setOpen] = useState(false);
+  const [migrating, setMigrating] = useState(false);
+  const [migrationProgress, setMigrationProgress] = useState<AudioMigrationProgress | null>(null);
   const { previewing, startPreview, stopPreview } = useTTSPreview();
 
   const ttsEnabled = useSettingsStore((s) => s.ttsEnabled);
@@ -95,6 +98,33 @@ export function TtsConfigPopover() {
     },
     [stopPreview],
   );
+
+  const handleMigrateAudio = useCallback(async () => {
+    if (migrating) return;
+    setMigrating(true);
+    setMigrationProgress(null);
+    try {
+      const result = await migrateLocalAudioToR2((progress) => {
+        setMigrationProgress(progress);
+      });
+      if (result.total === 0) {
+        toast.success('没有需要迁移的本地语音');
+      } else if (result.failed > 0) {
+        toast.warning(
+          `语音迁移完成：已上传 ${result.uploaded} 个，失败 ${result.failed} 个，已回写 ${result.patchedStages} 个课堂`,
+        );
+      } else {
+        toast.success(
+          `语音迁移完成：已上传 ${result.uploaded} 个，并回写 ${result.patchedStages} 个课堂`,
+        );
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '迁移失败';
+      toast.error(message);
+    } finally {
+      setMigrating(false);
+    }
+  }, [migrating]);
 
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
@@ -174,6 +204,47 @@ export function TtsConfigPopover() {
                 )}
                 {previewing ? t('toolbar.ttsPreviewing') : t('toolbar.ttsPreview')}
               </button>
+            </div>
+
+            <div className="rounded-lg border border-border/50 bg-muted/20 p-2.5 space-y-2">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="text-xs font-medium">历史语音迁移到云端</div>
+                  <div className="text-[11px] text-muted-foreground leading-relaxed mt-0.5">
+                    将当前浏览器里旧的本地语音缓存批量上传到 Cloudflare R2，并把课堂里的语音地址回写为云端 URL。
+                  </div>
+                </div>
+                <button
+                  onClick={handleMigrateAudio}
+                  disabled={migrating}
+                  className={cn(
+                    'inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-all shrink-0',
+                    migrating
+                      ? 'bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300'
+                      : 'bg-muted/60 text-muted-foreground hover:bg-muted hover:text-foreground',
+                  )}
+                >
+                  {migrating ? (
+                    <Loader2 className="size-3 animate-spin" />
+                  ) : (
+                    <CloudUpload className="size-3" />
+                  )}
+                  {migrating ? '迁移中' : '开始迁移'}
+                </button>
+              </div>
+
+              {migrationProgress && (
+                <div className="rounded-md bg-background/80 px-2 py-1.5 text-[11px] text-muted-foreground space-y-1">
+                  <div>
+                    进度：{migrationProgress.processed}/{migrationProgress.total}，
+                    已上传 {migrationProgress.uploaded}，失败 {migrationProgress.failed}
+                  </div>
+                  {migrationProgress.currentMessage && <div>{migrationProgress.currentMessage}</div>}
+                  {migrationProgress.currentAudioId && (
+                    <div className="truncate">当前音频：{migrationProgress.currentAudioId}</div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}

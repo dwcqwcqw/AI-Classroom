@@ -10,6 +10,7 @@
 import { NextRequest } from 'next/server';
 import { generateTTS } from '@/lib/audio/tts-providers';
 import { resolveTTSApiKey, resolveTTSBaseUrl } from '@/lib/server/provider-config';
+import { putSharedFile } from '@/lib/server/shared-files';
 import type { TTSProviderId } from '@/lib/audio/types';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
@@ -23,11 +24,13 @@ export async function POST(req: NextRequest) {
   let ttsProviderId: string | undefined;
   let ttsVoice: string | undefined;
   let audioId: string | undefined;
+  let stageId: string | undefined;
   try {
     const body = await req.json();
     const { text, ttsModelId, ttsSpeed, ttsApiKey, ttsBaseUrl } = body as {
       text: string;
       audioId: string;
+      stageId?: string;
       ttsProviderId: TTSProviderId;
       ttsModelId?: string;
       ttsVoice: string;
@@ -38,6 +41,7 @@ export async function POST(req: NextRequest) {
     ttsProviderId = body.ttsProviderId;
     ttsVoice = body.ttsVoice;
     audioId = body.audioId;
+    stageId = body.stageId;
 
     // Validate required fields
     if (!text || !audioId || !ttsProviderId || !ttsVoice) {
@@ -85,10 +89,52 @@ export async function POST(req: NextRequest) {
     // Generate audio
     const { audio, format } = await generateTTS(config, text);
 
+    const mimeType =
+      format === 'wav'
+        ? 'audio/wav'
+        : format === 'ogg'
+          ? 'audio/ogg'
+          : format === 'aac'
+            ? 'audio/aac'
+            : 'audio/mpeg';
+
+    let uploaded:
+      | {
+          id: string;
+          objectKey: string;
+          sizeBytes: number;
+          kind: string;
+          url: string;
+        }
+      | undefined;
+    try {
+      const uploadBytes = new Uint8Array(audio.byteLength);
+      uploadBytes.set(audio);
+      uploaded = await putSharedFile({
+        fileName: `${audioId}.${format || 'mp3'}`,
+        mimeType,
+        data: uploadBytes.buffer,
+        stageId,
+        kind: 'audio',
+      });
+    } catch (uploadError) {
+      log.warn(
+        `TTS upload skipped [audioId=${audioId}, stageId=${stageId ?? 'global'}]:`,
+        uploadError,
+      );
+    }
+
     // Convert to base64
     const base64 = Buffer.from(audio).toString('base64');
 
-    return apiSuccess({ audioId, base64, format });
+    return apiSuccess({
+      audioId,
+      base64,
+      format,
+      url: uploaded?.url,
+      objectKey: uploaded?.objectKey,
+      fileId: uploaded?.id,
+    });
   } catch (error) {
     log.error(
       `TTS generation failed [provider=${ttsProviderId ?? 'unknown'}, voice=${ttsVoice ?? 'unknown'}, audioId=${audioId ?? 'unknown'}]:`,

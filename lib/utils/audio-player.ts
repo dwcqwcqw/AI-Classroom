@@ -156,13 +156,22 @@ export class AudioPlayer {
             log.warn('Audio URL fetch failed, will try HTMLAudio fallback:', e);
           }
         } else {
-          // IndexedDB blob
+          // IndexedDB blob, or cloud URL if the blob only exists remotely
           const record = await db.audioFiles.get(audioId);
           if (!record) return false;
-          try {
-            bytes = await blobToArrayBuffer(record.blob);
-          } catch (e) {
-            log.warn('Blob→ArrayBuffer failed, will try HTMLAudio fallback:', e);
+          if (record.ossKey) {
+            try {
+              bytes = await fetchAudioBytes(record.ossKey);
+            } catch (e) {
+              log.warn('Cloud audio fetch failed, will try IndexedDB blob fallback:', e);
+            }
+          }
+          if (!bytes) {
+            try {
+              bytes = await blobToArrayBuffer(record.blob);
+            } catch (e) {
+              log.warn('Blob→ArrayBuffer failed, will try HTMLAudio fallback:', e);
+            }
           }
         }
 
@@ -193,8 +202,12 @@ export class AudioPlayer {
     } else {
       const record = await db.audioFiles.get(audioId);
       if (!record) return false;
-      src = URL.createObjectURL(record.blob);
-      needsRevoke = true;
+      if (record.ossKey) {
+        src = record.ossKey;
+      } else {
+        src = URL.createObjectURL(record.blob);
+        needsRevoke = true;
+      }
     }
 
     return new Promise<boolean>((resolve, reject) => {

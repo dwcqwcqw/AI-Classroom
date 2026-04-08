@@ -258,11 +258,12 @@ async function fetchSceneActions(
 export async function generateAndStoreTTS(
   audioId: string,
   text: string,
+  stageId: string,
   signal?: AbortSignal,
   voiceOverride?: string,
-): Promise<void> {
+): Promise<{ audioUrl?: string; ossKey?: string }> {
   const settings = useSettingsStore.getState();
-  if (settings.ttsProviderId === 'browser-native-tts') return;
+  if (settings.ttsProviderId === 'browser-native-tts') return {};
 
   const ttsProviderConfig = settings.ttsProvidersConfig?.[settings.ttsProviderId];
   const response = await fetch('/api/generate/tts', {
@@ -271,9 +272,10 @@ export async function generateAndStoreTTS(
     body: JSON.stringify({
       text,
       audioId,
+      stageId,
       ttsProviderId: settings.ttsProviderId,
       ttsModelId: ttsProviderConfig?.modelId,
-      ttsVoice: settings.ttsVoice,
+      ttsVoice: voiceOverride || settings.ttsVoice,
       ttsSpeed: settings.ttsSpeed,
       ttsApiKey: ttsProviderConfig?.apiKey || undefined,
       ttsBaseUrl: ttsProviderConfig?.baseUrl || undefined,
@@ -303,7 +305,13 @@ export async function generateAndStoreTTS(
     blob,
     format: data.format,
     createdAt: Date.now(),
+    ossKey: data.url || undefined,
   });
+
+  return {
+    audioUrl: data.url || undefined,
+    ossKey: data.objectKey || undefined,
+  };
 }
 
 /** Generate TTS for all speech actions in a scene. Returns result. */
@@ -330,7 +338,16 @@ async function generateTTSForScene(
     let success = false;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        await generateAndStoreTTS(audioId, action.text, signal, action.voice);
+        const ttsResult = await generateAndStoreTTS(
+          audioId,
+          action.text,
+          scene.stageId,
+          signal,
+          action.voice,
+        );
+        if (ttsResult?.audioUrl) {
+          action.audioUrl = ttsResult.audioUrl;
+        }
         success = true;
         break;
       } catch (error) {

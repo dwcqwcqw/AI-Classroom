@@ -729,6 +729,7 @@ function GenerationPreviewContent() {
               body: JSON.stringify({
                 text: action.text,
                 audioId,
+                stageId: stage.id,
                 ttsProviderId: settings.ttsProviderId,
                 ttsModelId: ttsProviderConfig?.modelId,
                 ttsVoice: settings.ttsVoice,
@@ -756,7 +757,11 @@ function GenerationPreviewContent() {
               blob,
               format: ttsData.format,
               createdAt: Date.now(),
+              ossKey: ttsData.url || undefined,
             });
+            if (ttsData.url) {
+              action.audioUrl = ttsData.url;
+            }
           } catch (err) {
             log.warn(`[TTS] Failed for ${audioId}:`, err);
             ttsFailCount++;
