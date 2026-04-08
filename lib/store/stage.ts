@@ -563,6 +563,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
           chats: data.chats,
           refineSessions: data.refineSessions ?? {},
           outlines,
+          failedOutlines: [],
           // Compute generatingOutlines from persisted outlines minus completed scenes
           generatingOutlines: outlines.filter((o) => !data.scenes.some((s) => s.order === o.order)),
         });

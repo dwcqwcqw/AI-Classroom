@@ -43,7 +43,6 @@ import {
   renameStage,
   getFirstSlideByStages,
   toggleBookmark,
-  isStarred,
 } from '@/lib/utils/stage-storage';
 import { ThumbnailSlide } from '@/components/slide-renderer/components/ThumbnailSlide';
 import type { Slide } from '@/lib/types/slides';
@@ -135,7 +134,6 @@ function HomePage() {
   const [themeOpen, setThemeOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [classrooms, setClassrooms] = useState<StageListItem[]>([]);
-  const [bookmarkedIds, setBookmarkedIds] = useState<Set<string>>(new Set());
   const [thumbnails, setThumbnails] = useState<Record<string, Slide>>({});
   const [books, setBooks] = useState<
     Array<{
@@ -153,8 +151,8 @@ function HomePage() {
   const toolbarRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const starredClassrooms = classrooms.filter((c) => bookmarkedIds.has(c.id));
-  const recentClassrooms = classrooms.filter((c) => !bookmarkedIds.has(c.id));
+  const starredClassrooms = classrooms.filter((c) => c.isBookmarked);
+  const recentClassrooms = classrooms.filter((c) => !c.isBookmarked);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -173,7 +171,6 @@ function HomePage() {
     try {
       const list = await listStages();
       setClassrooms(list);
-      setBookmarkedIds(new Set(list.filter((c) => c.isBookmarked).map((c) => c.id)));
       // Load first slide thumbnails
       if (list.length > 0) {
         const slides = await getFirstSlideByStages(list.map((c) => c.id));
@@ -226,17 +223,11 @@ function HomePage() {
     }
   };
 
-  const handleToggleBookmark = (id: string) => {
-    const nowStarred = toggleBookmark(id);
-    setBookmarkedIds((prev) => {
-      const next = new Set(prev);
-      if (nowStarred) {
-        next.add(id);
-      } else {
-        next.delete(id);
-      }
-      return next;
-    });
+  const handleToggleBookmark = async (id: string) => {
+    const nowStarred = await toggleBookmark(id);
+    setClassrooms((prev) =>
+      prev.map((c) => (c.id === id ? { ...c, isBookmarked: nowStarred } : c)),
+    );
   };
 
   const updateForm = <K extends keyof FormState>(field: K, value: FormState[K]) => {

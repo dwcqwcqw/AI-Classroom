@@ -37,16 +37,19 @@ export function Header({ currentSceneTitle }: HeaderProps) {
   const { exporting: isExporting, exportPPTX, exportResourcePack } = useExportPPTX();
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const exportRef = useRef<HTMLDivElement>(null);
+  const stage = useStageStore((s) => s.stage);
   const scenes = useStageStore((s) => s.scenes);
   const generatingOutlines = useStageStore((s) => s.generatingOutlines);
-  const failedOutlines = useStageStore((s) => s.failedOutlines);
   const mediaTasks = useMediaGenerationStore((s) => s.tasks);
 
+  const slideSceneCount = scenes.filter((s) => s.content?.type === 'slide').length;
+  const mediaTasksForStage = Object.values(mediaTasks).filter((t) => t.stageId === stage?.id);
+  const mediaSettledForStage =
+    mediaTasksForStage.length === 0 ||
+    mediaTasksForStage.every((task) => task.status === 'done' || task.status === 'failed');
+
   const canExport =
-    scenes.length > 0 &&
-    generatingOutlines.length === 0 &&
-    failedOutlines.length === 0 &&
-    Object.values(mediaTasks).every((task) => task.status === 'done' || task.status === 'failed');
+    slideSceneCount > 0 && generatingOutlines.length === 0 && mediaSettledForStage;
 
   const languageRef = useRef<HTMLDivElement>(null);
   const themeRef = useRef<HTMLDivElement>(null);
@@ -105,6 +108,7 @@ export function Header({ currentSceneTitle }: HeaderProps) {
               onClick={() => {
                 setLanguageOpen(!languageOpen);
                 setThemeOpen(false);
+                setExportMenuOpen(false);
               }}
               className="flex items-center gap-1 px-2 sm:px-3 py-1.5 rounded-full text-xs font-bold text-gray-500 dark:text-gray-400 hover:bg-white dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:shadow-sm transition-all"
             >
@@ -150,6 +154,7 @@ export function Header({ currentSceneTitle }: HeaderProps) {
               onClick={() => {
                 setThemeOpen(!themeOpen);
                 setLanguageOpen(false);
+                setExportMenuOpen(false);
               }}
               className="p-2 rounded-full text-gray-400 dark:text-gray-500 hover:bg-white dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:shadow-sm transition-all group"
             >
@@ -210,70 +215,78 @@ export function Header({ currentSceneTitle }: HeaderProps) {
           {/* Settings Button */}
           <div className="relative">
             <button
-              onClick={() => setSettingsOpen(true)}
+              onClick={() => {
+                setSettingsOpen(true);
+                setExportMenuOpen(false);
+              }}
               className="p-2 rounded-full text-gray-400 dark:text-gray-500 hover:bg-white dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:shadow-sm transition-all group"
             >
               <Settings className="w-4 h-4 group-hover:rotate-90 transition-transform duration-500" />
             </button>
           </div>
-        </div>
 
-        {/* Export Dropdown */}
-        <div className="relative" ref={exportRef}>
-          <button
-            onClick={() => {
-              if (canExport && !isExporting) setExportMenuOpen(!exportMenuOpen);
-            }}
-            disabled={!canExport || isExporting}
-            title={
-              canExport
-                ? isExporting
-                  ? t('export.exporting')
-                  : t('export.pptx')
-                : t('share.notReady')
-            }
-            className={cn(
-              'shrink-0 p-2 rounded-full transition-all',
-              canExport && !isExporting
-                ? 'text-gray-400 dark:text-gray-500 hover:bg-white dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:shadow-sm'
-                : 'text-gray-300 dark:text-gray-600 cursor-not-allowed opacity-50',
-            )}
-          >
-            {isExporting ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Download className="w-4 h-4" />
-            )}
-          </button>
-          {exportMenuOpen && (
-            <div className="absolute top-full mt-2 right-0 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg overflow-hidden z-50 min-w-[200px]">
-              <button
-                onClick={() => {
-                  setExportMenuOpen(false);
-                  exportPPTX();
-                }}
-                className="w-full px-4 py-2.5 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-2.5"
-              >
-                <FileDown className="w-4 h-4 text-gray-400 shrink-0" />
-                <span>{t('export.pptx')}</span>
-              </button>
-              <button
-                onClick={() => {
-                  setExportMenuOpen(false);
-                  exportResourcePack();
-                }}
-                className="w-full px-4 py-2.5 text-left text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center gap-2.5"
-              >
-                <Package className="w-4 h-4 text-gray-400 shrink-0" />
-                <div>
-                  <div>{t('export.resourcePack')}</div>
-                  <div className="text-[11px] text-gray-400 dark:text-gray-500">
-                    {t('export.resourcePackDesc')}
+          <div className="w-[1px] h-4 bg-gray-200 dark:bg-gray-700" />
+
+          {/* Export: PPTX + 教学资源包 */}
+          <div className="relative" ref={exportRef}>
+            <button
+              type="button"
+              onClick={() => {
+                if (canExport && !isExporting) setExportMenuOpen(!exportMenuOpen);
+              }}
+              disabled={!canExport || isExporting}
+              title={
+                canExport
+                  ? isExporting
+                    ? t('export.exporting')
+                    : t('export.pptx')
+                  : t('export.notReady')
+              }
+              className={cn(
+                'shrink-0 p-2 rounded-full transition-all',
+                canExport && !isExporting
+                  ? 'text-gray-400 dark:text-gray-500 hover:bg-white dark:hover:bg-gray-700 hover:text-gray-800 dark:hover:text-gray-200 hover:shadow-sm'
+                  : 'text-gray-300 dark:text-gray-600 cursor-not-allowed opacity-50',
+              )}
+            >
+              {isExporting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Download className="w-4 h-4" />
+              )}
+            </button>
+            {exportMenuOpen && (
+              <div className="absolute top-full mt-2 right-0 z-50 min-w-[220px] rounded-xl border border-gray-200 bg-white py-1 shadow-lg dark:border-gray-700 dark:bg-gray-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setExportMenuOpen(false);
+                    exportPPTX();
+                  }}
+                  className="flex w-full items-center gap-2.5 px-4 py-2.5 text-left text-sm transition-colors hover:bg-gray-100 dark:hover:bg-gray-700"
+                >
+                  <FileDown className="h-4 w-4 shrink-0 text-gray-400" />
+                  <span>{t('export.pptx')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setExportMenuOpen(false);
+                    exportResourcePack();
+                  }}
+                  className="flex w-full items-start gap-2.5 px-4 py-2.5 text-left text-sm transition-colors hover:bg-gray-100 dark:hover:bg-gray-700"
+                >
+                  <Package className="mt-0.5 h-4 w-4 shrink-0 text-gray-400" />
+                  <div className="min-w-0">
+                    <div>{t('export.resourcePack')}</div>
+                    <div className="text-[11px] text-gray-400 dark:text-gray-500">
+                      {t('export.resourcePackDesc')}
+                    </div>
                   </div>
-                </div>
-              </button>
-            </div>
-          )}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} />

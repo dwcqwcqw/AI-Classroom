@@ -12,6 +12,7 @@ interface SharedStageRow {
   scenes_json: string;
   chats_json: string;
   current_scene_id: string | null;
+  is_starred: number;
 }
 
 export async function listSharedStages(): Promise<StageListItem[]> {
@@ -21,11 +22,11 @@ export async function listSharedStages(): Promise<StageListItem[]> {
 
   const { results } = await db
     .prepare(
-      `SELECT id, name, description, scene_count, created_at, updated_at
+      `SELECT id, name, description, scene_count, created_at, updated_at, is_starred
        FROM shared_stages
-       ORDER BY updated_at DESC`,
+       ORDER BY is_starred DESC, updated_at DESC`,
     )
-    .all<Pick<SharedStageRow, 'id' | 'name' | 'description' | 'scene_count' | 'created_at' | 'updated_at'>>();
+    .all<Pick<SharedStageRow, 'id' | 'name' | 'description' | 'scene_count' | 'created_at' | 'updated_at' | 'is_starred'>>();
 
   return results.map((r) => ({
     id: r.id,
@@ -34,6 +35,7 @@ export async function listSharedStages(): Promise<StageListItem[]> {
     sceneCount: Number(r.scene_count ?? 0),
     createdAt: Number(r.created_at ?? Date.now()),
     updatedAt: Number(r.updated_at ?? Date.now()),
+    isBookmarked: Boolean(r.is_starred),
   }));
 }
 
@@ -70,13 +72,14 @@ export async function saveSharedStage(stageId: string, data: StageStoreData): Pr
   const sceneCount = data.scenes?.length ?? 0;
   const stageName = data.stage?.name || 'Untitled Stage';
   const createdAt = data.stage?.createdAt || now;
+  const isStarred = data.isStarred ? 1 : 0;
 
   await db
     .prepare(
       `INSERT INTO shared_stages (
         id, name, description, scene_count, created_at, updated_at,
-        stage_json, scenes_json, chats_json, current_scene_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        stage_json, scenes_json, chats_json, current_scene_id, is_starred
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         name = excluded.name,
         description = excluded.description,
@@ -85,7 +88,8 @@ export async function saveSharedStage(stageId: string, data: StageStoreData): Pr
         stage_json = excluded.stage_json,
         scenes_json = excluded.scenes_json,
         chats_json = excluded.chats_json,
-        current_scene_id = excluded.current_scene_id`,
+        current_scene_id = excluded.current_scene_id,
+        is_starred = excluded.is_starred`,
     )
     .bind(
       stageId,
@@ -98,6 +102,7 @@ export async function saveSharedStage(stageId: string, data: StageStoreData): Pr
       JSON.stringify(data.scenes ?? []),
       JSON.stringify(data.chats ?? []),
       data.currentSceneId ?? null,
+      isStarred,
     )
     .run();
 }
@@ -138,4 +143,27 @@ export async function writeSharedSetting<T>(key: string, value: T): Promise<void
     )
     .bind(key, JSON.stringify(value), Date.now())
     .run();
+}
+
+export async function toggleStageStar(stageId: string): Promise<boolean> {
+  const db = getD1();
+  if (!db) return false;
+  await ensureSharedTables(db);
+
+  // 先获取当前状态
+  const row = await db
+    .prepare('SELECT is_starred FROM shared_stages WHERE id = ?')
+    .bind(stageId)
+    .first<{ is_starred: number }>();
+
+  if (!row) return false;
+
+  const newStarred = row.is_starred ? 0 : 1;
+
+  await db
+    .prepare('UPDATE shared_stages SET is_starred = ? WHERE id = ?')
+    .bind(newStarred, stageId)
+    .run();
+
+  return newStarred === 1;
 }

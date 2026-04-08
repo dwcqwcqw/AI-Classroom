@@ -36,6 +36,7 @@ export const commonZhCN = {
     exporting: '正在导出...',
     exportSuccess: '导出成功',
     exportFailed: '导出失败',
+    notReady: '幻灯片就绪且媒体任务完成后可导出',
   },
 } as const;
 
@@ -77,5 +78,6 @@ export const commonEnUS = {
     exporting: 'Exporting...',
     exportSuccess: 'Export successful',
     exportFailed: 'Export failed',
+    notReady: 'Export when slides are ready and media tasks have finished',
   },
 } as const;

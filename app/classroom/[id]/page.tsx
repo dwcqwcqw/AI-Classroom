@@ -148,6 +148,9 @@ export default function ClassroomDetailPage() {
                 useStageStore.setState({
                   scenes,
                   currentSceneId: scenes[0]?.id ?? null,
+                  generatingOutlines: [],
+                  failedOutlines: [],
+                  outlines: [],
                 });
                 updateStep('server_storage', 'ok');
                 log.info('Loaded from server-side storage:', classroomId);

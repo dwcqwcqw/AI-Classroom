@@ -37,7 +37,8 @@ export async function ensureSharedTables(db: D1DatabaseLike) {
         stage_json TEXT NOT NULL,
         scenes_json TEXT NOT NULL,
         chats_json TEXT NOT NULL,
-        current_scene_id TEXT
+        current_scene_id TEXT,
+        is_starred INTEGER NOT NULL DEFAULT 0
       )`,
     )
     .run();
@@ -66,4 +67,11 @@ export async function ensureSharedTables(db: D1DatabaseLike) {
       )`,
     )
     .run();
+
+  // 迁移：为已有数据添加 is_starred 列（如果还没有）
+  try {
+    await db.prepare('ALTER TABLE shared_stages ADD COLUMN is_starred INTEGER NOT NULL DEFAULT 0').run();
+  } catch {
+    // 列已存在，忽略
+  }
 }

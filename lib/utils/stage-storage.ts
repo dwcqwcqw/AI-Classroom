@@ -20,6 +20,8 @@ export interface StageStoreData {
   currentSceneId: string | null;
   chats: ChatSession[];
   refineSessions?: Record<string, SceneRefineSession>;
+  /** Persisted on shared_stages; optional for backward-compatible payloads */
+  isStarred?: boolean;
 }
 
 export interface StageListItem {
@@ -144,9 +146,7 @@ export async function listStages(): Promise<StageListItem[]> {
 
     const json = (await res.json()) as { success: boolean; stages?: StageListItem[] };
     const stages = json.stages ?? [];
-    const starredIds = getStarredIds();
-    const starredSet = new Set(starredIds);
-    return stages.map((s) => ({ ...s, isBookmarked: starredSet.has(s.id) }));
+    return stages;
   } catch (error) {
     log.error('Failed to list shared stages:', error);
     return [];
@@ -254,37 +254,20 @@ export async function stageExists(stageId: string): Promise<boolean> {
 
 // ─── Bookmark (star) ───────────────────────────────────────────────────────────
 
-const BOOKMARK_STORAGE_KEY = 'maic:starredClassrooms';
-
-export function getStarredIds(): string[] {
-  if (typeof window === 'undefined') return [];
+export async function toggleBookmark(stageId: string): Promise<boolean> {
   try {
-    const raw = localStorage.getItem(BOOKMARK_STORAGE_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
+    const res = await fetch(`/api/shared/stages/${encodeURIComponent(stageId)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'toggleStar' }),
+    });
 
-export function isStarred(stageId: string): boolean {
-  return getStarredIds().includes(stageId);
-}
-
-export function toggleBookmark(stageId: string): boolean {
-  const ids = new Set(getStarredIds());
-  const nowStarred = ids.has(stageId);
-  if (nowStarred) {
-    ids.delete(stageId);
-  } else {
-    ids.add(stageId);
+    if (!res.ok) return false;
+    const json = (await res.json()) as { success: boolean; isStarred?: boolean };
+    return json.isStarred ?? false;
+  } catch (error) {
+    log.error('Failed to toggle bookmark:', error);
+    return false;
   }
-  try {
-    localStorage.setItem(BOOKMARK_STORAGE_KEY, JSON.stringify([...ids]));
-  } catch {
-    /* ignore */
-  }
-  return !nowStarred;
 }
 
