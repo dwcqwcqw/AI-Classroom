@@ -455,6 +455,9 @@ export class PlaybackEngine {
     switch (action.type) {
       case 'speech': {
         const speechAction = action as SpeechAction;
+        const currentScene = this.scenes[this.sceneIndex];
+        const audioId = speechAction.audioId || `tts_${speechAction.id}`;
+        speechAction.audioId = audioId;
         this.callbacks.onSpeechStart?.(speechAction.text);
 
         // onEnded → processNext; if paused, resume() will call processNext
@@ -491,7 +494,12 @@ export class PlaybackEngine {
         };
 
         this.audioPlayer
-          .play(speechAction.audioId || '', speechAction.audioUrl)
+          .play(audioId, {
+            audioUrl: speechAction.audioUrl,
+            text: speechAction.text,
+            stageId: currentScene?.stageId,
+            voiceOverride: speechAction.voice,
+          })
           .then((audioStarted) => {
             if (!audioStarted) {
               // No pre-generated audio — try browser-native TTS if selected

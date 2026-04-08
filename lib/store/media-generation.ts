@@ -179,19 +179,16 @@ export const useMediaGenerationStore = create<MediaGenerationState>()((set, get)
             retryCount: 0,
             stageId,
           };
-        } else {
-          // Re-wrap blob with stored mimeType — IndexedDB may drop Blob.type
-          const blob = rec.blob.type ? rec.blob : new Blob([rec.blob], { type: rec.mimeType });
-          const objectUrl = URL.createObjectURL(blob);
-          const poster = rec.poster ? URL.createObjectURL(rec.poster) : undefined;
+        } else if (rec.ossKey) {
+          // Use ossKey as the objectUrl (media stored in R2)
           restored[elementId] = {
             elementId,
             type: rec.type,
             status: 'done',
             prompt: rec.prompt,
             params,
-            objectUrl,
-            poster,
+            objectUrl: rec.ossKey,
+            poster: rec.posterUrl,
             retryCount: 0,
             stageId,
           };

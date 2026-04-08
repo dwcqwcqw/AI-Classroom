@@ -170,50 +170,43 @@ async function generateSingleMedia(
       throw new Error('MEDIA_GENERATION_RESULT_MISSING');
     }
 
-    // Fetch blob from URL
+    // Fetch blob for upload
     const blob = await fetchAsBlob(resultUrl);
     const posterBlob = posterUrl ? await fetchAsBlob(posterUrl).catch(() => undefined) : undefined;
 
-    // Store in IndexedDB first
+    // Upload to shared cloud storage (R2) - required
+    const fd = new FormData();
+    fd.append('stageId', stageId);
+    fd.append('kind', req.type === 'image' ? 'image' : 'video');
+    fd.append('file', new File([blob], `${req.elementId}.${req.type === 'image' ? 'png' : 'mp4'}`, { type: mimeType }));
+    const uploadRes = await fetch('/api/shared/files', { method: 'POST', body: fd });
+    const uploadJson = await uploadRes.json().catch(() => ({ success: false }));
+    if (!uploadRes.ok || !uploadJson.success) {
+      throw new Error('Cloud upload failed');
+    }
+
+    const ossKey = uploadJson.file?.url || '';
+    const posterOssKey = posterBlob ? await uploadPosterToR2(stageId, req.elementId, posterBlob) : undefined;
+
+    // Store metadata in IndexedDB (ossKey is required - media is in R2)
     await db.mediaFiles.put({
       id: mediaFileKey(stageId, req.elementId),
       stageId,
       type: req.type,
-      blob,
       mimeType,
       size: blob.size,
-      poster: posterBlob,
+      posterUrl: posterOssKey,
       prompt: req.prompt,
       params: JSON.stringify({
         aspectRatio: req.aspectRatio,
         style: req.style,
       }),
       createdAt: Date.now(),
+      ossKey,
     });
 
-    // Best-effort upload to shared cloud storage (R2)
-    try {
-      const fd = new FormData();
-      fd.append('stageId', stageId);
-      fd.append('kind', req.type === 'image' ? 'image' : 'video');
-      fd.append('file', new File([blob], `${req.elementId}.${req.type === 'image' ? 'png' : 'mp4'}`, { type: mimeType }));
-      await fetch('/api/shared/files', { method: 'POST', body: fd });
-
-      if (posterBlob) {
-        const pfd = new FormData();
-        pfd.append('stageId', stageId);
-        pfd.append('kind', 'image');
-        pfd.append('file', new File([posterBlob], `${req.elementId}-poster.png`, { type: 'image/png' }));
-        await fetch('/api/shared/files', { method: 'POST', body: pfd });
-      }
-    } catch {
-      // ignore cloud upload failure; local storage still works
-    }
-
-    // Update store with object URL
-    const objectUrl = URL.createObjectURL(blob);
-    const posterObjectUrl = posterBlob ? URL.createObjectURL(posterBlob) : undefined;
-    useMediaGenerationStore.getState().markDone(req.elementId, objectUrl, posterObjectUrl);
+    // Update store with CDN URL
+    useMediaGenerationStore.getState().markDone(req.elementId, ossKey, posterOssKey);
   } catch (err) {
     if (abortSignal?.aborted) return;
     const message = err instanceof Error ? err.message : String(err);
@@ -228,7 +221,6 @@ async function generateSingleMedia(
           id: mediaFileKey(stageId, req.elementId),
           stageId,
           type: req.type,
-          blob: new Blob(), // empty placeholder
           mimeType: req.type === 'image' ? 'image/png' : 'video/mp4',
           size: 0,
           prompt: req.prompt,
@@ -239,8 +231,9 @@ async function generateSingleMedia(
           error: message,
           errorCode,
           createdAt: Date.now(),
+          ossKey: '',
         })
-        .catch(() => {}); // best-effort
+        .catch(() => {});
     }
   }
 }
@@ -320,6 +313,20 @@ async function callVideoApi(
   const url = data.result?.url;
   if (!url) throw new Error('No video URL in response');
   return { url, poster: data.result?.poster };
+}
+
+async function uploadPosterToR2(stageId: string, elementId: string, posterBlob: Blob): Promise<string | undefined> {
+  try {
+    const pfd = new FormData();
+    pfd.append('stageId', stageId);
+    pfd.append('kind', 'image');
+    pfd.append('file', new File([posterBlob], `${elementId}-poster.png`, { type: 'image/png' }));
+    const res = await fetch('/api/shared/files', { method: 'POST', body: pfd });
+    const json = await res.json().catch(() => ({ success: false }));
+    return json.success ? json.file?.url : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function fetchAsBlob(url: string): Promise<Blob> {

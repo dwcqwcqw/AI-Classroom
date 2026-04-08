@@ -71,21 +71,21 @@ export interface SceneRecord {
  */
 export interface AudioFileRecord {
   id: string; // Primary key (audioId)
-  blob: Blob; // Audio binary data
   duration?: number; // Duration (seconds)
   format: string; // mp3, wav, etc.
   text?: string; // Corresponding text content
   voice?: string; // Voice used
   createdAt: number;
-  ossKey?: string; // Full CDN URL for this audio blob
+  ossKey: string; // Full CDN URL for this audio blob (required - all audio stored in R2)
 }
 
 /**
- * ImageFile table - Image files
+ * ImageFile table - Image files (PDF images, temporary)
+ * Note: These are small transient images, stored as base64 data URLs
  */
 export interface ImageFileRecord {
   id: string; // Primary key
-  blob: Blob; // Image binary data
+  dataUrl: string; // Base64 data URL (avoid IndexedDB blob size issues)
   filename: string; // Original filename
   mimeType: string; // image/png, image/jpeg, etc.
   size: number; // File size (bytes)
@@ -139,16 +139,14 @@ export interface MediaFileRecord {
   id: string; // Compound key: `${stageId}:${elementId}`
   stageId: string; // FK → stages.id
   type: 'image' | 'video';
-  blob: Blob; // Media binary
   mimeType: string; // image/png, video/mp4
   size: number;
-  poster?: Blob; // Video thumbnail blob
+  posterUrl?: string; // CDN URL for the poster
   prompt: string; // Original prompt (for retry)
   params: string; // JSON-serialized generation params
-  error?: string; // If set, this is a failed task (blob is empty placeholder)
+  error?: string; // If set, this is a failed task
   errorCode?: string; // Structured error code (e.g. 'CONTENT_SENSITIVE')
-  ossKey?: string; // Full CDN URL for this media blob
-  posterOssKey?: string; // Full CDN URL for the poster blob
+  ossKey: string; // Full CDN URL for this media blob (required - all media stored in R2)
   createdAt: number;
 }
 

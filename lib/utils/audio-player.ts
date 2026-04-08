@@ -9,6 +9,7 @@
  * Falls back to HTMLAudioElement for environments where AudioContext is unavailable.
  */
 
+import { useSettingsStore } from '@/lib/store/settings';
 import { db } from '@/lib/utils/database';
 import { createLogger } from '@/lib/logger';
 
@@ -52,13 +53,24 @@ async function fetchAudioBytes(url: string): Promise<ArrayBuffer> {
   return res.arrayBuffer();
 }
 
-async function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as ArrayBuffer);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsArrayBuffer(blob);
-  });
+function withTimeout(timeoutMs: number): AbortSignal {
+  const controller = new AbortController();
+  const timer = setTimeout(
+    () => controller.abort(new Error(`Request timed out after ${timeoutMs}ms`)),
+    timeoutMs,
+  );
+  controller.signal.addEventListener('abort', () => clearTimeout(timer), { once: true });
+  return controller.signal;
+}
+
+interface GenerateFallbackAudioOptions {
+  text?: string;
+  stageId?: string;
+  voiceOverride?: string;
+}
+
+interface PlayAudioOptions extends GenerateFallbackAudioOptions {
+  audioUrl?: string;
 }
 
 // ─── AudioContext-based player ────────────────────────────────────────────────
@@ -136,10 +148,13 @@ export class AudioPlayer {
   }
 
   /**
-   * Play audio from a URL or IndexedDB cache.
+   * Play audio from a URL or R2 (via ossKey in IndexedDB).
    * Returns true if audio started, false if no audio available.
    */
-  public async play(audioId: string, audioUrl?: string): Promise<boolean> {
+  public async play(audioId: string, audioUrlOrOptions?: string | PlayAudioOptions): Promise<boolean> {
+    const options: PlayAudioOptions =
+      typeof audioUrlOrOptions === 'string' ? { audioUrl: audioUrlOrOptions } : (audioUrlOrOptions ?? {});
+
     try {
       await ensureContextRunning();
       const ctx = getAudioContext();
@@ -148,29 +163,23 @@ export class AudioPlayer {
       if (ctx) {
         let bytes: ArrayBuffer | null = null;
 
-        if (audioUrl) {
-          // Server-generated audio URL
+        // Priority 1: Server-generated audio URL from action
+        if (options.audioUrl) {
           try {
-            bytes = await fetchAudioBytes(audioUrl);
+            bytes = await fetchAudioBytes(options.audioUrl);
           } catch (e) {
-            log.warn('Audio URL fetch failed, will try HTMLAudio fallback:', e);
+            log.warn('Audio URL fetch failed:', e);
           }
-        } else {
-          // IndexedDB blob, or cloud URL if the blob only exists remotely
-          const record = await db.audioFiles.get(audioId);
-          if (!record) return false;
-          if (record.ossKey) {
+        }
+
+        // Priority 2: R2 URL from IndexedDB
+        if (!bytes) {
+          const record = audioId ? await db.audioFiles.get(audioId).catch(() => undefined) : undefined;
+          if (record?.ossKey) {
             try {
               bytes = await fetchAudioBytes(record.ossKey);
             } catch (e) {
-              log.warn('Cloud audio fetch failed, will try IndexedDB blob fallback:', e);
-            }
-          }
-          if (!bytes) {
-            try {
-              bytes = await blobToArrayBuffer(record.blob);
-            } catch (e) {
-              log.warn('Blob→ArrayBuffer failed, will try HTMLAudio fallback:', e);
+              log.warn('R2 audio fetch failed:', e);
             }
           }
         }
@@ -184,47 +193,40 @@ export class AudioPlayer {
         }
       }
 
+      await this.generateFallbackAudio(audioId, options);
+
       // ── HTMLAudioElement fallback ───────────────────────────────────────────
-      return this.playWithHTMLAudio(audioId, audioUrl);
+      return this.playWithHTMLAudio(audioId, options.audioUrl);
     } catch (error) {
       log.error('Failed to play audio:', error);
       throw error;
     }
   }
 
-  /** HTMLAudioElement fallback for environments without Web Audio support */
+  /** HTMLAudioElement fallback - only uses ossKey URL */
   private async playWithHTMLAudio(audioId: string, audioUrl?: string): Promise<boolean> {
     let src: string | null = null;
-    let needsRevoke = false;
 
     if (audioUrl) {
       src = audioUrl;
-    } else {
-      const record = await db.audioFiles.get(audioId);
-      if (!record) return false;
-      if (record.ossKey) {
+    } else if (audioId) {
+      const record = await db.audioFiles.get(audioId).catch(() => undefined);
+      if (record?.ossKey) {
         src = record.ossKey;
-      } else {
-        src = URL.createObjectURL(record.blob);
-        needsRevoke = true;
       }
     }
+
+    if (!src) return false;
 
     return new Promise<boolean>((resolve, reject) => {
       const audio = document.createElement('audio');
       audio.setAttribute('playsinline', '');
       audio.preload = 'auto';
 
-      const cleanup = () => {
-        if (needsRevoke && src) URL.revokeObjectURL(src);
-      };
-
       audio.addEventListener('ended', () => {
-        cleanup();
         this.onEndedCallback?.();
       });
       audio.addEventListener('error', () => {
-        cleanup();
         reject(new Error('HTMLAudio playback error'));
       });
 
@@ -233,11 +235,65 @@ export class AudioPlayer {
 
       audio.play()
         .then(() => resolve(true))
-        .catch((e) => {
-          cleanup();
-          reject(e);
-        });
+        .catch((e) => reject(e));
     });
+  }
+
+  private async generateFallbackAudio(
+    audioId: string,
+    options: GenerateFallbackAudioOptions,
+  ): Promise<ArrayBuffer | null> {
+    const { text, stageId, voiceOverride } = options;
+    if (!text || !stageId) return null;
+
+    const settings = useSettingsStore.getState();
+    if (!settings.ttsEnabled || settings.ttsProviderId === 'browser-native-tts') {
+      return null;
+    }
+
+    const ttsProviderConfig = settings.ttsProvidersConfig?.[settings.ttsProviderId];
+    const response = await fetch('/api/generate/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text,
+        audioId,
+        stageId,
+        ttsProviderId: settings.ttsProviderId,
+        ttsModelId: ttsProviderConfig?.modelId,
+        ttsVoice: voiceOverride || settings.ttsVoice,
+        ttsSpeed: settings.ttsSpeed,
+        ttsApiKey: ttsProviderConfig?.apiKey || undefined,
+        ttsBaseUrl: ttsProviderConfig?.baseUrl || undefined,
+      }),
+      signal: withTimeout(25_000),
+    });
+
+    const data = await response
+      .json()
+      .catch(() => ({ success: false, error: response.statusText || 'Invalid TTS response' }));
+    if (!response.ok || !data.success || !data.base64 || !data.format) {
+      log.warn('Real-time TTS fallback failed for', audioId, data.error || response.statusText);
+      return null;
+    }
+
+    const binary = atob(data.base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+
+    // Store metadata in IndexedDB (ossKey is required - audio is in R2)
+    await db.audioFiles.put({
+      id: audioId,
+      format: data.format,
+      text,
+      voice: voiceOverride || settings.ttsVoice,
+      createdAt: Date.now(),
+      ossKey: data.url || '',
+    });
+
+    return bytes.buffer;
   }
 
   public pause(): void {

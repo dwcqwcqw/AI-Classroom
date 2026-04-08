@@ -299,13 +299,13 @@ export async function generateAndStoreTTS(
   for (let i = 0; i < binary.length; i++) {
     bytes[i] = binary.charCodeAt(i);
   }
-  const blob = new Blob([bytes], { type: `audio/${data.format}` });
+
+  // Store metadata in IndexedDB (ossKey is required - audio is in R2)
   await db.audioFiles.put({
     id: audioId,
-    blob,
     format: data.format,
     createdAt: Date.now(),
-    ossKey: data.url || undefined,
+    ossKey: data.url || '',
   });
 
   return {

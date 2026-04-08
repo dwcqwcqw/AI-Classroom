@@ -1,6 +1,5 @@
 'use client';
 
-import { db, type AudioFileRecord } from '@/lib/utils/database';
 import { listStages, loadStageData, saveStageData, type StageStoreData } from '@/lib/utils/stage-storage';
 import { createLogger } from '@/lib/logger';
 
@@ -26,13 +25,6 @@ type AudioStageReference = {
   stageId: string;
   data: StageStoreData;
 };
-
-function audioMimeFromRecord(record: AudioFileRecord): string {
-  if (record.format === 'wav') return 'audio/wav';
-  if (record.format === 'ogg') return 'audio/ogg';
-  if (record.format === 'aac') return 'audio/aac';
-  return 'audio/mpeg';
-}
 
 function isSpeechActionWithAudioId(
   action: unknown,
@@ -96,13 +88,19 @@ function patchAudioUrlInStageData(data: StageStoreData, audioId: string, url: st
   return changed;
 }
 
-async function uploadAudioRecord(
-  record: AudioFileRecord,
+async function uploadAudioFromUrl(
+  audioId: string,
+  audioUrl: string,
   stageId?: string,
 ): Promise<{ url: string; fileId: string } | null> {
-  const file = new File([record.blob], `${record.id}.${record.format || 'mp3'}`, {
-    type: audioMimeFromRecord(record),
-  });
+  // Fetch audio from existing URL
+  const res = await fetch(audioUrl);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch audio: ${res.status}`);
+  }
+  const blob = await res.blob();
+  const file = new File([blob], `${audioId}.mp3`, { type: blob.type || 'audio/mpeg' });
+
   const form = new FormData();
   form.append('file', file);
   form.append('kind', 'audio');
@@ -110,23 +108,23 @@ async function uploadAudioRecord(
     form.append('stageId', stageId);
   }
 
-  const res = await fetch('/api/shared/files', {
+  const uploadRes = await fetch('/api/shared/files', {
     method: 'POST',
     body: form,
   });
 
-  const json = (await res.json().catch(() => null)) as
+  const json = (await uploadRes.json().catch(() => null)) as
     | { success: true; file: { id: string; url: string } }
     | { success: false; error?: string; details?: string }
     | null;
 
-  if (!res.ok || !json || !json.success) {
+  if (!uploadRes.ok || !json || !json.success) {
     const details =
       json && 'details' in json && json.details
         ? json.details
         : json && 'error' in json && json.error
           ? json.error
-          : `HTTP ${res.status}`;
+          : `HTTP ${uploadRes.status}`;
     throw new Error(details);
   }
 
@@ -136,68 +134,92 @@ async function uploadAudioRecord(
 export async function migrateLocalAudioToR2(
   onProgress?: (progress: AudioMigrationProgress) => void,
 ): Promise<AudioMigrationResult> {
-  const allAudio = await db.audioFiles.toArray();
   const audioStageIndex = await buildAudioStageIndex();
   const stageDataCache = new Map<string, StageStoreData>();
   const touchedStageIds = new Set<string>();
 
-  const pending = allAudio.filter((record) => !record.ossKey);
-  const result: AudioMigrationResult = {
-    total: pending.length,
+  // Collect all audio URLs that need migration (have audioId but no audioUrl or need re-upload)
+  const pendingActions: Array<{ audioId: string; audioUrl?: string; stageId: string; data: StageStoreData }> = [];
+  for (const [audioId, refs] of audioStageIndex.entries()) {
+    for (const ref of refs) {
+      for (const scene of ref.data.scenes) {
+        for (const action of scene.actions ?? []) {
+          if (!isSpeechActionWithAudioId(action)) continue;
+          if (action.audioId === audioId) {
+            pendingActions.push({
+              audioId,
+              audioUrl: action.audioUrl,
+              stageId: ref.stageId,
+              data: ref.data,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  const uniqueAudios = new Map<string, { audioId: string; audioUrl?: string; stageId: string }>();
+  for (const item of pendingActions) {
+    if (!uniqueAudios.has(item.audioId)) {
+      uniqueAudios.set(item.audioId, { audioId: item.audioId, audioUrl: item.audioUrl, stageId: item.stageId });
+    }
+  }
+
+  const result: AudioMigrationProgress = {
+    total: uniqueAudios.size,
     processed: 0,
     uploaded: 0,
     skipped: 0,
     failed: 0,
     patchedStages: 0,
-    updatedStageIds: [],
   };
 
   const emit = (extra?: Partial<AudioMigrationProgress>) => {
     onProgress?.({ ...result, ...extra });
   };
 
-  emit({ currentMessage: pending.length > 0 ? '开始扫描本地语音缓存…' : '没有待迁移的本地语音' });
+  emit({ currentMessage: result.total > 0 ? '开始扫描本地语音缓存…' : '没有待迁移的本地语音' });
 
-  for (const record of pending) {
+  for (const [audioId, { audioUrl, stageId }] of uniqueAudios) {
     result.processed += 1;
-    const refs = audioStageIndex.get(record.id) ?? [];
-    const primaryStageId = refs[0]?.stageId;
 
     try {
       emit({
-        currentAudioId: record.id,
-        currentStageId: primaryStageId,
-        currentMessage: `正在上传 ${record.id}`,
+        currentAudioId: audioId,
+        currentStageId: stageId,
+        currentMessage: `正在上传 ${audioId}`,
       });
 
-      const uploaded = await uploadAudioRecord(record, primaryStageId);
+      if (!audioUrl) {
+        result.skipped += 1;
+        continue;
+      }
+
+      const uploaded = await uploadAudioFromUrl(audioId, audioUrl, stageId);
       if (!uploaded) {
         result.skipped += 1;
         continue;
       }
 
-      await db.audioFiles.put({
-        ...record,
-        ossKey: uploaded.url,
-      });
-
       result.uploaded += 1;
 
+      // Update all stage data that references this audio
+      const refs = audioStageIndex.get(audioId) ?? [];
       for (const ref of refs) {
         const cached = stageDataCache.get(ref.stageId) ?? structuredClone(ref.data);
         stageDataCache.set(ref.stageId, cached);
-        const patched = patchAudioUrlInStageData(cached, record.id, uploaded.url);
+        const patched = patchAudioUrlInStageData(cached, audioId, uploaded.url);
         if (patched) {
           touchedStageIds.add(ref.stageId);
         }
       }
     } catch (error) {
       result.failed += 1;
-      log.warn(`Failed to migrate audio ${record.id}:`, error);
+      log.warn(`Failed to migrate audio ${audioId}:`, error);
       emit({
-        currentAudioId: record.id,
-        currentStageId: primaryStageId,
-        currentMessage: `上传失败: ${record.id}`,
+        currentAudioId: audioId,
+        currentStageId: stageId,
+        currentMessage: `上传失败: ${audioId}`,
       });
     }
   }
@@ -209,7 +231,6 @@ export async function migrateLocalAudioToR2(
   }
 
   result.patchedStages = touchedStageIds.size;
-  result.updatedStageIds = Array.from(touchedStageIds);
   emit({
     currentMessage:
       result.total === 0
@@ -217,5 +238,8 @@ export async function migrateLocalAudioToR2(
         : `迁移完成：上传 ${result.uploaded} 个，失败 ${result.failed} 个`,
   });
 
-  return result;
+  return {
+    ...result,
+    updatedStageIds: Array.from(touchedStageIds),
+  };
 }

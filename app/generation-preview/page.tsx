@@ -158,17 +158,19 @@ function GenerationPreviewContent() {
       // Step 0: Parse PDF if needed
       if (hasPdfToAnalyze) {
         log.debug('=== Generation Preview: Parsing PDF ===');
-        const pdfBlob = await loadPdfBlob(currentSession.pdfStorageKey!);
-        if (!pdfBlob) {
+        const pdfDataUrl = await loadPdfBlob(currentSession.pdfStorageKey!);
+        if (!pdfDataUrl) {
           throw new Error(t('generation.pdfLoadFailed'));
         }
 
-        // Ensure pdfBlob is a valid Blob with content
-        if (!(pdfBlob instanceof Blob) || pdfBlob.size === 0) {
-          log.error('Invalid PDF blob:', {
-            type: typeof pdfBlob,
-            size: pdfBlob instanceof Blob ? pdfBlob.size : 'N/A',
-          });
+        // Fetch blob from data URL for PDF processing
+        const pdfBlobResponse = await fetch(pdfDataUrl);
+        if (!pdfBlobResponse.ok) {
+          throw new Error(t('generation.pdfLoadFailed'));
+        }
+        const pdfBlob = await pdfBlobResponse.blob();
+        if (pdfBlob.size === 0) {
+          log.error('Invalid PDF blob: empty response');
           throw new Error(t('generation.pdfLoadFailed'));
         }
 
@@ -751,13 +753,11 @@ function GenerationPreviewContent() {
             const binary = atob(ttsData.base64);
             const bytes = new Uint8Array(binary.length);
             for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-            const blob = new Blob([bytes], { type: `audio/${ttsData.format}` });
             await db.audioFiles.put({
               id: audioId,
-              blob,
               format: ttsData.format,
               createdAt: Date.now(),
-              ossKey: ttsData.url || undefined,
+              ossKey: ttsData.url || '',
             });
             if (ttsData.url) {
               action.audioUrl = ttsData.url;

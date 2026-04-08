@@ -20,6 +20,7 @@ import {
   ChevronUp,
   Clock,
   X,
+  Star,
 } from 'lucide-react';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { createLogger } from '@/lib/logger';
@@ -41,6 +42,8 @@ import {
   deleteStageData,
   renameStage,
   getFirstSlideByStages,
+  toggleBookmark,
+  isStarred,
 } from '@/lib/utils/stage-storage';
 import { ThumbnailSlide } from '@/components/slide-renderer/components/ThumbnailSlide';
 import type { Slide } from '@/lib/types/slides';
@@ -132,6 +135,7 @@ function HomePage() {
   const [themeOpen, setThemeOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [classrooms, setClassrooms] = useState<StageListItem[]>([]);
+  const [bookmarkedIds, setBookmarkedIds] = useState<Set<string>>(new Set());
   const [thumbnails, setThumbnails] = useState<Record<string, Slide>>({});
   const [books, setBooks] = useState<
     Array<{
@@ -148,6 +152,9 @@ function HomePage() {
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const starredClassrooms = classrooms.filter((c) => bookmarkedIds.has(c.id));
+  const recentClassrooms = classrooms.filter((c) => !bookmarkedIds.has(c.id));
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -166,6 +173,7 @@ function HomePage() {
     try {
       const list = await listStages();
       setClassrooms(list);
+      setBookmarkedIds(new Set(list.filter((c) => c.isBookmarked).map((c) => c.id)));
       // Load first slide thumbnails
       if (list.length > 0) {
         const slides = await getFirstSlideByStages(list.map((c) => c.id));
@@ -216,6 +224,19 @@ function HomePage() {
       log.error('Failed to rename classroom:', err);
       toast.error(t('classroom.renameFailed'));
     }
+  };
+
+  const handleToggleBookmark = (id: string) => {
+    const nowStarred = toggleBookmark(id);
+    setBookmarkedIds((prev) => {
+      const next = new Set(prev);
+      if (nowStarred) {
+        next.add(id);
+      } else {
+        next.delete(id);
+      }
+      return next;
+    });
   };
 
   const updateForm = <K extends keyof FormState>(field: K, value: FormState[K]) => {
@@ -626,7 +647,7 @@ function HomePage() {
         </AnimatePresence>
       </motion.div>
 
-      {/* ═══ Recent classrooms — collapsible ═══ */}
+      {/* ═══ Starred + Recent classrooms — collapsible ═══ */}
       {classrooms.length > 0 && (
         <motion.div
           initial={{ opacity: 0 }}
@@ -672,32 +693,85 @@ function HomePage() {
                 transition={{ duration: 0.4, ease: [0.25, 0.1, 0.25, 1] }}
                 className="w-full overflow-hidden"
               >
-                <div className="pt-8 grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-5 gap-y-8">
-                  {classrooms.map((classroom, i) => (
-                    <motion.div
-                      key={classroom.id}
-                      initial={{ opacity: 0, y: 16 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{
-                        delay: i * 0.04,
-                        duration: 0.35,
-                        ease: 'easeOut',
-                      }}
-                    >
-                      <ClassroomCard
-                        classroom={classroom}
-                        slide={thumbnails[classroom.id]}
-                        formatDate={formatDate}
-                        onDelete={handleDelete}
-                        onRename={handleRename}
-                        confirmingDelete={pendingDeleteId === classroom.id}
-                        onConfirmDelete={() => confirmDelete(classroom.id)}
-                        onCancelDelete={() => setPendingDeleteId(null)}
-                        onClick={() => router.push(`/classroom/${classroom.id}`)}
-                      />
-                    </motion.div>
-                  ))}
-                </div>
+                {/* Starred classrooms — always shown if any */}
+                {starredClassrooms.length > 0 && (
+                  <div className="pt-8 space-y-4">
+                    <div className="flex items-center gap-2">
+                      <Star className="size-4 text-amber-500" />
+                      <span className="text-[13px] font-semibold text-foreground/70">
+                        {t('classroom.starredClassrooms')}
+                      </span>
+                      <span className="text-[11px] tabular-nums opacity-50">
+                        {starredClassrooms.length}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-5 gap-y-8">
+                      {starredClassrooms.map((classroom, i) => (
+                        <motion.div
+                          key={classroom.id}
+                          initial={{ opacity: 0, y: 16 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{ delay: i * 0.04, duration: 0.35, ease: 'easeOut' }}
+                        >
+                          <ClassroomCard
+                            classroom={classroom}
+                            slide={thumbnails[classroom.id]}
+                            formatDate={formatDate}
+                            onDelete={handleDelete}
+                            onRename={handleRename}
+                            confirmingDelete={pendingDeleteId === classroom.id}
+                            onConfirmDelete={() => confirmDelete(classroom.id)}
+                            onCancelDelete={() => setPendingDeleteId(null)}
+                            onToggleBookmark={handleToggleBookmark}
+                            onClick={() => router.push(`/classroom/${classroom.id}`)}
+                          />
+                        </motion.div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Recent classrooms — below starred */}
+                {recentClassrooms.length > 0 && (
+                  <div className={cn('space-y-4', starredClassrooms.length > 0 && 'pt-8')}>
+                    <div className="flex items-center gap-2">
+                      <Clock className="size-4 text-muted-foreground/50" />
+                      <span className="text-[13px] font-semibold text-foreground/70">
+                        {t('classroom.recentClassrooms')}
+                      </span>
+                      <span className="text-[11px] tabular-nums opacity-50">
+                        {recentClassrooms.length}
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-5 gap-y-8">
+                      {recentClassrooms.map((classroom, i) => (
+                        <motion.div
+                          key={classroom.id}
+                          initial={{ opacity: 0, y: 16 }}
+                          animate={{ opacity: 1, y: 0 }}
+                          transition={{
+                            delay: (starredClassrooms.length + i) * 0.04,
+                            duration: 0.35,
+                            ease: 'easeOut',
+                          }}
+                        >
+                          <ClassroomCard
+                            classroom={classroom}
+                            slide={thumbnails[classroom.id]}
+                            formatDate={formatDate}
+                            onDelete={handleDelete}
+                            onRename={handleRename}
+                            confirmingDelete={pendingDeleteId === classroom.id}
+                            onConfirmDelete={() => confirmDelete(classroom.id)}
+                            onCancelDelete={() => setPendingDeleteId(null)}
+                            onToggleBookmark={handleToggleBookmark}
+                            onClick={() => router.push(`/classroom/${classroom.id}`)}
+                          />
+                        </motion.div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </motion.div>
             )}
           </AnimatePresence>
@@ -1055,6 +1129,7 @@ function ClassroomCard({
   confirmingDelete,
   onConfirmDelete,
   onCancelDelete,
+  onToggleBookmark,
   onClick,
 }: {
   classroom: StageListItem;
@@ -1065,6 +1140,7 @@ function ClassroomCard({
   confirmingDelete: boolean;
   onConfirmDelete: () => void;
   onCancelDelete: () => void;
+  onToggleBookmark: (id: string) => void;
   onClick: () => void;
 }) {
   const { t } = useI18n();
@@ -1134,6 +1210,26 @@ function ClassroomCard({
               exit={{ opacity: 0 }}
               transition={{ duration: 0.15 }}
             >
+              {/* Star bookmark — top-left */}
+              <Button
+                size="icon"
+                variant="ghost"
+                className={cn(
+                  'absolute top-2 left-2 size-7 opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm rounded-full',
+                  classroom.isBookmarked
+                    ? 'bg-amber-500/80 hover:bg-amber-500 text-white'
+                    : 'bg-black/30 hover:bg-amber-500/70 text-white hover:text-white',
+                )}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onToggleBookmark(classroom.id);
+                }}
+              >
+                <Star
+                  className={cn('size-3.5', classroom.isBookmarked && 'fill-current')}
+                />
+              </Button>
+
               <Button
                 size="icon"
                 variant="ghost"

@@ -1,6 +1,7 @@
 export const generationZhCN = {
   classroom: {
     recentClassrooms: '最近学习',
+    starredClassrooms: '收藏课程',
     today: '今天',
     yesterday: '昨天',
     daysAgo: '天前',
@@ -71,6 +72,7 @@ export const generationZhCN = {
 export const generationEnUS = {
   classroom: {
     recentClassrooms: 'Recent',
+    starredClassrooms: 'Starred',
     today: 'Today',
     yesterday: 'Yesterday',
     daysAgo: 'days ago',

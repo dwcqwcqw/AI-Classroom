@@ -1,8 +1,8 @@
 /**
  * Image Storage Utilities
  *
- * Store PDF images in IndexedDB to avoid sessionStorage 5MB limit.
- * Images are stored as Blobs for efficient storage.
+ * Store PDF images in IndexedDB using base64 data URLs to avoid
+ * IndexedDB blob size limitations and cross-browser issues.
  */
 
 import { db, type ImageFileRecord } from './database';
@@ -12,22 +12,10 @@ import { createLogger } from '@/lib/logger';
 const log = createLogger('ImageStorage');
 
 /**
- * Convert base64 data URL to Blob
+ * Convert base64 data URL to data URL (returns as-is, already base64)
  */
-function base64ToBlob(base64DataUrl: string): Blob {
-  const parts = base64DataUrl.split(',');
-  const mimeMatch = parts[0].match(/:(.*?);/);
-  const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
-  const base64Data = parts[1];
-  const byteString = atob(base64Data);
-  const arrayBuffer = new ArrayBuffer(byteString.length);
-  const uint8Array = new Uint8Array(arrayBuffer);
-
-  for (let i = 0; i < byteString.length; i++) {
-    uint8Array[i] = byteString.charCodeAt(i);
-  }
-
-  return new Blob([uint8Array], { type: mimeType });
+function getDataUrlFromBase64(base64DataUrl: string): string {
+  return base64DataUrl;
 }
 
 /**
@@ -54,7 +42,7 @@ export async function storeImages(
 
   for (const img of images) {
     try {
-      const blob = base64ToBlob(img.src);
+      const dataUrl = img.src; // Already a data URL
       const mimeMatch = img.src.match(/data:(.*?);/);
       const mimeType = mimeMatch ? mimeMatch[1] : 'image/png';
 
@@ -63,10 +51,10 @@ export async function storeImages(
 
       const record: ImageFileRecord = {
         id: storageId,
-        blob,
+        dataUrl,
         filename: `${img.id}.png`,
         mimeType,
-        size: blob.size,
+        size: Math.ceil((dataUrl.length - dataUrl.indexOf(',') - 1) * 0.75), // Estimate base64 size
         createdAt: Date.now(),
       };
 
@@ -92,10 +80,9 @@ export async function loadImageMapping(imageIds: string[]): Promise<Record<strin
     try {
       const record = await db.imageFiles.get(storageId);
       if (record) {
-        const base64 = await blobToBase64(record.blob);
         // Extract original ID (img_1) from storage ID (session_xxx_img_1)
         const originalId = storageId.replace(/^session_[^_]+_/, '');
-        mapping[originalId] = base64;
+        mapping[originalId] = record.dataUrl;
       }
     } catch (error) {
       log.error(`Failed to load image ${storageId}:`, error);
@@ -146,21 +133,21 @@ export async function getImageStorageSize(): Promise<number> {
 }
 
 /**
- * Store a PDF file as a Blob in IndexedDB.
- * Returns a storage key that can be used to retrieve the blob later.
+ * Store a PDF file as base64 data URL in IndexedDB.
+ * Returns a storage key that can be used to retrieve the data URL later.
  */
 export async function storePdfBlob(file: File): Promise<string> {
   const storageKey = `pdf_${nanoid(10)}`;
-  const blob = new Blob([await file.arrayBuffer()], {
+  const dataUrl = await blobToBase64(new Blob([await file.arrayBuffer()], {
     type: file.type || 'application/pdf',
-  });
+  }));
 
   const record: ImageFileRecord = {
     id: storageKey,
-    blob,
+    dataUrl,
     filename: file.name,
     mimeType: file.type || 'application/pdf',
-    size: blob.size,
+    size: file.size,
     createdAt: Date.now(),
   };
 
@@ -169,9 +156,9 @@ export async function storePdfBlob(file: File): Promise<string> {
 }
 
 /**
- * Load a PDF Blob from IndexedDB by its storage key.
+ * Load a PDF data URL from IndexedDB by its storage key.
  */
-export async function loadPdfBlob(key: string): Promise<Blob | null> {
+export async function loadPdfBlob(key: string): Promise<string | null> {
   const record = await db.imageFiles.get(key);
-  return record?.blob ?? null;
+  return record?.dataUrl ?? null;
 }

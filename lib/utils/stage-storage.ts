@@ -29,6 +29,7 @@ export interface StageListItem {
   sceneCount: number;
   createdAt: number;
   updatedAt: number;
+  isBookmarked?: boolean;
 }
 
 function getRefineStorageKey(stageId: string) {
@@ -142,7 +143,10 @@ export async function listStages(): Promise<StageListItem[]> {
     if (!res.ok) return [];
 
     const json = (await res.json()) as { success: boolean; stages?: StageListItem[] };
-    return json.stages ?? [];
+    const stages = json.stages ?? [];
+    const starredIds = getStarredIds();
+    const starredSet = new Set(starredIds);
+    return stages.map((s) => ({ ...s, isBookmarked: starredSet.has(s.id) }));
   } catch (error) {
     log.error('Failed to list shared stages:', error);
     return [];
@@ -247,3 +251,40 @@ export async function stageExists(stageId: string): Promise<boolean> {
     return false;
   }
 }
+
+// ─── Bookmark (star) ───────────────────────────────────────────────────────────
+
+const BOOKMARK_STORAGE_KEY = 'maic:starredClassrooms';
+
+export function getStarredIds(): string[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = localStorage.getItem(BOOKMARK_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+export function isStarred(stageId: string): boolean {
+  return getStarredIds().includes(stageId);
+}
+
+export function toggleBookmark(stageId: string): boolean {
+  const ids = new Set(getStarredIds());
+  const nowStarred = ids.has(stageId);
+  if (nowStarred) {
+    ids.delete(stageId);
+  } else {
+    ids.add(stageId);
+  }
+  try {
+    localStorage.setItem(BOOKMARK_STORAGE_KEY, JSON.stringify([...ids]));
+  } catch {
+    /* ignore */
+  }
+  return !nowStarred;
+}
+
