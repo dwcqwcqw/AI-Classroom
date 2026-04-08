@@ -1,5 +1,12 @@
 import { create } from 'zustand';
-import type { Stage, Scene, StageMode } from '@/lib/types/stage';
+import type {
+  Stage,
+  Scene,
+  StageMode,
+  SceneRefineSession,
+  SceneRefineMessage,
+  SceneRefineProgressEvent,
+} from '@/lib/types/stage';
 import { createSelectors } from '@/lib/utils/create-selectors';
 import type { ChatSession } from '@/lib/types/chat';
 import type { SceneOutline } from '@/lib/types/generation';
@@ -18,6 +25,52 @@ const log = createLogger('StageStore');
 
 /** Virtual scene ID used when the user navigates to a page still being generated */
 export const PENDING_SCENE_ID = '__pending__';
+
+type RefineSessionMap = Record<string, SceneRefineSession>;
+
+function createRefineIntroMessage(scene: Scene): SceneRefineMessage {
+  return {
+    role: 'assistant',
+    content:
+      `我是你的 AI 课程编辑助手。\n\n当前场景：**${scene.title}**（${scene.type}）\n\n` +
+      `你可以告诉我如何修改这个场景，例如：\n` +
+      `- 调整内容或重点\n- 修改讲解文字\n- 更改视觉风格\n- 增减幻灯片元素`,
+    createdAt: Date.now(),
+  };
+}
+
+function ensureRefineSession(
+  sessions: RefineSessionMap,
+  scene: Scene,
+): { sessions: RefineSessionMap; session: SceneRefineSession } {
+  const existing = sessions[scene.id];
+  if (existing) {
+    const nextSession: SceneRefineSession = {
+      ...existing,
+      sceneTitle: scene.title,
+      updatedAt: Date.now(),
+    };
+    return {
+      sessions: { ...sessions, [scene.id]: nextSession },
+      session: nextSession,
+    };
+  }
+
+  const session: SceneRefineSession = {
+    sceneId: scene.id,
+    sceneTitle: scene.title,
+    draftInput: '',
+    messages: [createRefineIntroMessage(scene)],
+    progressEvents: [],
+    status: 'idle',
+    appliedCount: 0,
+    updatedAt: Date.now(),
+  };
+  return {
+    sessions: { ...sessions, [scene.id]: session },
+    session,
+  };
+}
 
 // ==================== Debounce Helper ====================
 
@@ -73,6 +126,7 @@ interface StageState {
   generationStatus: 'idle' | 'generating' | 'paused' | 'completed' | 'error';
   currentGeneratingOrder: number;
   failedOutlines: FailedOutlineInfo[];
+  refineSessions: RefineSessionMap;
 
   // Actions
   setStage: (stage: Stage) => void;
@@ -92,6 +146,22 @@ interface StageState {
   addFailedOutline: (outline: SceneOutline, phase?: FailedPhase, reason?: string) => void;
   clearFailedOutlines: () => void;
   retryFailedOutline: (outlineId: string) => void;
+  ensureRefineSession: (scene: Scene) => void;
+  setRefineDraft: (sceneId: string, draftInput: string) => void;
+  appendRefineMessage: (sceneId: string, message: SceneRefineMessage) => void;
+  replaceStreamingRefineMessage: (sceneId: string, content: string) => void;
+  pushRefineProgress: (
+    sceneId: string,
+    event: Omit<SceneRefineProgressEvent, 'id' | 'createdAt'>,
+  ) => void;
+  markRefineStarted: (scene: Scene) => void;
+  markRefineFinished: (
+    sceneId: string,
+    status: 'completed' | 'error' | 'cancelled',
+    options?: { lastError?: string; appliedCountDelta?: number },
+  ) => void;
+  clearRefineStreamingMessage: (sceneId: string) => void;
+  getRefineSession: (sceneId: string) => SceneRefineSession | null;
 
   // Getters
   getCurrentScene: () => Scene | null;
@@ -118,6 +188,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
   generationStatus: 'idle' as const,
   currentGeneratingOrder: -1,
   failedOutlines: [],
+  refineSessions: {},
 
   // Actions
   setStage: (stage) => {
@@ -126,6 +197,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
       scenes: [],
       currentSceneId: null,
       chats: [],
+      refineSessions: {},
       generationEpoch: s.generationEpoch + 1,
     }));
     debouncedSave();
@@ -173,6 +245,8 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
   deleteScene: (sceneId) => {
     const scenes = get().scenes.filter((scene) => scene.id !== sceneId);
     const currentSceneId = get().currentSceneId;
+    const refineSessions = { ...get().refineSessions };
+    delete refineSessions[sceneId];
 
     // If deleted scene was current, select next or previous
     if (currentSceneId === sceneId) {
@@ -180,10 +254,11 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
       const newIndex = index < scenes.length ? index : scenes.length - 1;
       set({
         scenes,
+        refineSessions,
         currentSceneId: scenes[newIndex]?.id || null,
       });
     } else {
-      set({ scenes });
+      set({ scenes, refineSessions });
     }
     debouncedSave();
   },
@@ -264,6 +339,163 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
     });
   },
 
+  ensureRefineSession: (scene) => {
+    set((state) => {
+      const { sessions } = ensureRefineSession(state.refineSessions, scene);
+      return { refineSessions: sessions };
+    });
+    debouncedSave();
+  },
+
+  setRefineDraft: (sceneId, draftInput) => {
+    const currentScene = get().getSceneById(sceneId);
+    if (!currentScene) return;
+    set((state) => {
+      const { sessions, session } = ensureRefineSession(state.refineSessions, currentScene);
+      return {
+        refineSessions: {
+          ...sessions,
+          [sceneId]: {
+            ...session,
+            draftInput,
+            updatedAt: Date.now(),
+          },
+        },
+      };
+    });
+    debouncedSave();
+  },
+
+  appendRefineMessage: (sceneId, message) => {
+    const currentScene = get().getSceneById(sceneId);
+    if (!currentScene) return;
+    set((state) => {
+      const { sessions, session } = ensureRefineSession(state.refineSessions, currentScene);
+      return {
+        refineSessions: {
+          ...sessions,
+          [sceneId]: {
+            ...session,
+            messages: [...session.messages, message],
+            updatedAt: Date.now(),
+          },
+        },
+      };
+    });
+    debouncedSave();
+  },
+
+  replaceStreamingRefineMessage: (sceneId, content) => {
+    set((state) => {
+      const session = state.refineSessions[sceneId];
+      if (!session) return {};
+      const messages = [...session.messages];
+      const last = messages[messages.length - 1];
+      if (last?.isStreaming) {
+        messages[messages.length - 1] = { ...last, content };
+      }
+      return {
+        refineSessions: {
+          ...state.refineSessions,
+          [sceneId]: {
+            ...session,
+            messages,
+            updatedAt: Date.now(),
+          },
+        },
+      };
+    });
+    debouncedSave();
+  },
+
+  pushRefineProgress: (sceneId, event) => {
+    set((state) => {
+      const session = state.refineSessions[sceneId];
+      if (!session) return {};
+      return {
+        refineSessions: {
+          ...state.refineSessions,
+          [sceneId]: {
+            ...session,
+            progressEvents: [
+              ...session.progressEvents,
+              {
+                ...event,
+                id: `${sceneId}:${Date.now()}:${session.progressEvents.length}`,
+                createdAt: Date.now(),
+              },
+            ],
+            updatedAt: Date.now(),
+          },
+        },
+      };
+    });
+    debouncedSave();
+  },
+
+  markRefineStarted: (scene) => {
+    set((state) => {
+      const { sessions, session } = ensureRefineSession(state.refineSessions, scene);
+      return {
+        refineSessions: {
+          ...sessions,
+          [scene.id]: {
+            ...session,
+            status: 'running',
+            lastError: undefined,
+            startedAt: Date.now(),
+            updatedAt: Date.now(),
+          },
+        },
+      };
+    });
+    debouncedSave();
+  },
+
+  markRefineFinished: (sceneId, status, options) => {
+    set((state) => {
+      const session = state.refineSessions[sceneId];
+      if (!session) return {};
+      return {
+        refineSessions: {
+          ...state.refineSessions,
+          [sceneId]: {
+            ...session,
+            status,
+            lastError: options?.lastError,
+            appliedCount: session.appliedCount + (options?.appliedCountDelta ?? 0),
+            finishedAt: Date.now(),
+            updatedAt: Date.now(),
+          },
+        },
+      };
+    });
+    debouncedSave();
+  },
+
+  clearRefineStreamingMessage: (sceneId) => {
+    set((state) => {
+      const session = state.refineSessions[sceneId];
+      if (!session) return {};
+      const messages = [...session.messages];
+      const last = messages[messages.length - 1];
+      if (last?.isStreaming) {
+        messages[messages.length - 1] = { ...last, isStreaming: false };
+      }
+      return {
+        refineSessions: {
+          ...state.refineSessions,
+          [sceneId]: {
+            ...session,
+            messages,
+            updatedAt: Date.now(),
+          },
+        },
+      };
+    });
+    debouncedSave();
+  },
+
   // Getters
   getCurrentScene: () => {
     const { scenes, currentSceneId } = get();
@@ -279,9 +511,13 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
     return get().scenes.findIndex((s) => s.id === sceneId);
   },
 
+  getRefineSession: (sceneId) => {
+    return get().refineSessions[sceneId] ?? null;
+  },
+
   // Storage methods
   saveToStorage: async () => {
-    const { stage, scenes, currentSceneId, chats } = get();
+    const { stage, scenes, currentSceneId, chats, refineSessions } = get();
     if (!stage?.id) {
       log.warn('Cannot save: stage.id is required');
       return;
@@ -294,6 +530,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
         scenes,
         currentSceneId,
         chats,
+        refineSessions,
       });
     } catch (error) {
       log.error('Failed to save to storage:', error);
@@ -324,6 +561,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
           scenes: data.scenes,
           currentSceneId: data.currentSceneId,
           chats: data.chats,
+          refineSessions: data.refineSessions ?? {},
           outlines,
           // Compute generatingOutlines from persisted outlines minus completed scenes
           generatingOutlines: outlines.filter((o) => !data.scenes.some((s) => s.order === o.order)),
@@ -344,6 +582,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
       scenes: [],
       currentSceneId: null,
       chats: [],
+      refineSessions: {},
       outlines: [],
       generationEpoch: s.generationEpoch + 1,
       generationStatus: 'idle' as const,

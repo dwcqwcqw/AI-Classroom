@@ -5,7 +5,7 @@
  * Each stage has its own storage key based on stageId
  */
 
-import { Stage, Scene } from '../types/stage';
+import { Stage, Scene, type SceneRefineSession } from '../types/stage';
 import { ChatSession } from '../types/chat';
 import { db } from './database';
 import { deleteChatSessions } from './chat-storage';
@@ -19,6 +19,7 @@ export interface StageStoreData {
   scenes: Scene[];
   currentSceneId: string | null;
   chats: ChatSession[];
+  refineSessions?: Record<string, SceneRefineSession>;
 }
 
 export interface StageListItem {
@@ -30,10 +31,45 @@ export interface StageListItem {
   updatedAt: number;
 }
 
+function getRefineStorageKey(stageId: string) {
+  return `maic:refine-sessions:${stageId}`;
+}
+
+function readRefineSessionsFromLocal(stageId: string): Record<string, SceneRefineSession> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(getRefineStorageKey(stageId));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as Record<string, SceneRefineSession> | null;
+    return parsed ?? {};
+  } catch (error) {
+    log.warn(`Failed to read refine sessions from localStorage: ${stageId}`, error);
+    return {};
+  }
+}
+
+function writeRefineSessionsToLocal(
+  stageId: string,
+  refineSessions?: Record<string, SceneRefineSession>,
+): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const hasSessions = !!refineSessions && Object.keys(refineSessions).length > 0;
+    if (!hasSessions) {
+      window.localStorage.removeItem(getRefineStorageKey(stageId));
+      return;
+    }
+    window.localStorage.setItem(getRefineStorageKey(stageId), JSON.stringify(refineSessions));
+  } catch (error) {
+    log.warn(`Failed to write refine sessions to localStorage: ${stageId}`, error);
+  }
+}
+
 /**
  * Save stage data to IndexedDB
  */
 export async function saveStageData(stageId: string, data: StageStoreData): Promise<void> {
+  writeRefineSessionsToLocal(stageId, data.refineSessions);
   try {
     const res = await fetch(`/api/shared/stages/${encodeURIComponent(stageId)}`, {
       method: 'PUT',
@@ -63,8 +99,9 @@ export async function loadStageData(stageId: string): Promise<StageStoreData | n
     };
     const payload = json.data;
     if (!payload) return null;
-    if ('stage' in payload) return payload as StageStoreData;
-    if ('data' in payload) return payload.data ?? null;
+    const refineSessions = readRefineSessionsFromLocal(stageId);
+    if ('stage' in payload) return { ...(payload as StageStoreData), refineSessions };
+    if ('data' in payload) return payload.data ? { ...payload.data, refineSessions } : null;
     return null;
   } catch (error) {
     log.error('Failed to load shared stage:', error);
@@ -85,6 +122,9 @@ export async function deleteStageData(stageId: string): Promise<void> {
     // Also clear local playback/chat caches for current browser session
     await deleteChatSessions(stageId);
     await clearPlaybackState(stageId);
+    if (typeof window !== 'undefined') {
+      window.localStorage.removeItem(getRefineStorageKey(stageId));
+    }
 
     log.info(`Deleted shared stage: ${stageId}`);
   } catch (error) {

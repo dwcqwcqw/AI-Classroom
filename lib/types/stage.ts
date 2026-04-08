@@ -9,6 +9,34 @@ export type StageMode = 'autonomous' | 'playback';
 
 export type Whiteboard = Omit<Slide, 'theme' | 'turningMode' | 'sectionTag' | 'type'>;
 
+export interface SceneRefineMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  isStreaming?: boolean;
+  createdAt: number;
+}
+
+export interface SceneRefineProgressEvent {
+  id: string;
+  message: string;
+  status: 'running' | 'completed' | 'error' | 'cancelled';
+  createdAt: number;
+}
+
+export interface SceneRefineSession {
+  sceneId: string;
+  sceneTitle: string;
+  draftInput: string;
+  messages: SceneRefineMessage[];
+  progressEvents: SceneRefineProgressEvent[];
+  status: 'idle' | 'running' | 'completed' | 'error' | 'cancelled';
+  appliedCount: number;
+  lastError?: string;
+  startedAt?: number;
+  finishedAt?: number;
+  updatedAt: number;
+}
+
 /**
  * Stage - Represents the entire classroom/course
  */

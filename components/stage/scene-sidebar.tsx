@@ -58,6 +58,7 @@ export function SceneSidebar({
   const viewportRatio = useCanvasStore.use.viewportRatio();
 
   const deleteScene = useStageStore((s) => s.deleteScene);
+  const ensureRefineSession = useStageStore((s) => s.ensureRefineSession);
 
   const [retryingOutlineId, setRetryingOutlineId] = useState<string | null>(null);
   const [refineScene, setRefineScene] = useState<Scene | null>(null);
@@ -229,6 +230,7 @@ export function SceneSidebar({
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
+                        ensureRefineSession(scene);
                         setRefineScene(scene);
                       }}
                       className="size-5 rounded-full flex items-center justify-center text-violet-500 dark:text-violet-400 hover:bg-violet-100 dark:hover:bg-violet-900/40 transition-colors"
