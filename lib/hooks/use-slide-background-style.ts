@@ -33,7 +33,7 @@ export function useSlideBackgroundStyle(background: SlideBackground | undefined)
     }
 
     // Gradient background
-    if (type === 'gradient' && gradient) {
+    if (type === 'gradient' && gradient && Array.isArray(gradient.colors) && gradient.colors.length > 0) {
       const { type, colors, rotate } = gradient;
       const list = colors.map((item) => `${item.color} ${item.pos}%`);
 

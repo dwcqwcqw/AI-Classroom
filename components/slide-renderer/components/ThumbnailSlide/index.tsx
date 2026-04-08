@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { Slide } from '@/lib/types/slides';
+import type { PPTElement, Slide } from '@/lib/types/slides';
 import { useSlideBackgroundStyle } from '@/lib/hooks/use-slide-background-style';
 import { ThumbnailElement } from './ThumbnailElement';
 
@@ -31,6 +31,53 @@ export function ThumbnailSlide({
 }: ThumbnailSlideProps) {
   // Calculate scale ratio
   const scale = useMemo(() => size / viewportSize, [size, viewportSize]);
+
+  const safeElements = useMemo(() => {
+    const isTuple2 = (value: unknown): value is [number, number] =>
+      Array.isArray(value) &&
+      value.length >= 2 &&
+      typeof value[0] === 'number' &&
+      typeof value[1] === 'number';
+
+    const isSafeElement = (element: PPTElement) => {
+      const anyElement = element as unknown as Record<string, unknown>;
+
+      if (
+        !element ||
+        typeof anyElement.id !== 'string' ||
+        typeof anyElement.type !== 'string' ||
+        typeof anyElement.left !== 'number' ||
+        typeof anyElement.top !== 'number' ||
+        typeof anyElement.width !== 'number'
+      ) {
+        return false;
+      }
+
+      if (element.type !== 'line' && typeof anyElement.height !== 'number') {
+        return false;
+      }
+
+      if (element.type === 'shape') {
+        return typeof anyElement.path === 'string' && isTuple2(anyElement.viewBox);
+      }
+
+      if (element.type === 'line') {
+        return isTuple2(anyElement.start) && isTuple2(anyElement.end) && Array.isArray(anyElement.points);
+      }
+
+      if (element.type === 'latex') {
+        return typeof anyElement.html === 'string' || (typeof anyElement.path === 'string' && isTuple2(anyElement.viewBox));
+      }
+
+      if (element.type === 'chart') {
+        return Array.isArray(anyElement.data) && Array.isArray(anyElement.themeColors) && anyElement.themeColors.length > 0;
+      }
+
+      return true;
+    };
+
+    return Array.isArray(slide?.elements) ? slide.elements.filter(isSafeElement) : [];
+  }, [slide]);
 
   // Get background style
   const { backgroundStyle } = useSlideBackgroundStyle(slide.background);
@@ -71,7 +118,7 @@ export function ThumbnailSlide({
         <div className="background w-full h-full bg-center absolute" style={backgroundStyle} />
 
         {/* Render all elements */}
-        {slide.elements.map((element, index) => (
+        {safeElements.map((element, index) => (
           <ThumbnailElement key={element.id} elementInfo={element} elementIndex={index + 1} />
         ))}
       </div>

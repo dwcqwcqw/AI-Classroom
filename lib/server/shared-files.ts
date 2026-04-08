@@ -164,7 +164,7 @@ export async function getSharedFileById(fileId: string) {
   if (!row) return null;
 
   const object = await r2.get(row.object_key);
-  if (!object?.body) return null;
+  if (!object) return null;
 
   return {
     meta: {
