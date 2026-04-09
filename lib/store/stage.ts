@@ -8,6 +8,7 @@ import type {
   SceneRefineProgressEvent,
 } from '@/lib/types/stage';
 import { createSelectors } from '@/lib/utils/create-selectors';
+import { loadBookmarksFromLocal } from '@/lib/utils/stage-storage';
 import type { ChatSession } from '@/lib/types/chat';
 import type { SceneOutline } from '@/lib/types/generation';
 
