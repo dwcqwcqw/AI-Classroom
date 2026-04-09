@@ -1,5 +1,8 @@
 import { getD1, ensureSharedTables } from '@/lib/server/cloudflare-d1';
 import type { StageStoreData, StageListItem } from '@/lib/utils/stage-storage';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('shared-data');
 
 interface SharedStageRow {
   id: string;
