@@ -157,8 +157,18 @@ async function readR2ObjectBytes(object: unknown): Promise<ArrayBuffer> {
       const { done, value } = await reader.read();
       if (done) break;
       if (value) {
-        chunks.push(value);
-        total += value.byteLength;
+        // Normalize to Uint8Array — handle ArrayBuffer, typed-array views, and plain buffers
+        const buf =
+          value instanceof Uint8Array
+            ? value
+            : typeof (value as unknown as ArrayBuffer).byteLength === 'number'
+              ? new Uint8Array(value as unknown as ArrayBuffer)
+              : new Uint8Array(
+                  (value as unknown as { buffer?: ArrayBuffer }).buffer ??
+                    (value as unknown as ArrayBuffer),
+                );
+        chunks.push(buf);
+        total += buf.byteLength;
       }
     }
     const merged = new Uint8Array(total);
@@ -167,7 +177,7 @@ async function readR2ObjectBytes(object: unknown): Promise<ArrayBuffer> {
       merged.set(chunk, offset);
       offset += chunk.byteLength;
     }
-    return merged.buffer;
+    return merged.buffer.slice(0);
   }
 
   throw new Error('R2 object body is not readable');
