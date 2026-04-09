@@ -548,7 +548,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
     // Load current bookmark state from local cache so it gets synced to the server.
     // This ensures the star status is preserved across saves and visible on other devices.
     const localBookmarks = loadBookmarksFromLocal();
-    const isBookmarked = localBookmarks[stage.id] ?? false;
+    const isStarred = localBookmarks[stage.id] ?? false;
 
     try {
       const { saveStageData } = await import('@/lib/utils/stage-storage');
@@ -558,7 +558,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
         currentSceneId,
         chats,
         refineSessions,
-        isBookmarked,
+        isStarred,
       });
     } catch (error) {
       log.error('Failed to save to storage:', error);
