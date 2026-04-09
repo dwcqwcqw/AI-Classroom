@@ -378,8 +378,8 @@ export function Roundtable({
       onInputActivate?.();
     }
     setIsInputOpen(!isInputOpen);
-    // Mobile: close the "提问与同伴" drawer so the center stage input is visible on top
-    if (opening && !isMdUp) {
+    // Close "提问与同伴" drawer whenever opening text input so the stage input is not behind z-50 Dialog
+    if (opening) {
       setMobileInteractionOpen(false);
     }
     // Cancel any in-flight ASR to prevent ghost auto-sends
@@ -400,9 +400,7 @@ export function Roundtable({
       onInputActivate?.();
       setIsVoiceOpen(true);
       setIsInputOpen(false);
-      if (!isMdUp) {
-        setMobileInteractionOpen(false);
-      }
+      setMobileInteractionOpen(false);
       startRecording();
     }
   };
@@ -694,7 +692,7 @@ export function Roundtable({
         {/* Click-outside backdrop to dismiss input/voice */}
         {(isInputOpen || isVoiceOpen) && (
           <div
-            className="fixed top-0 left-0 right-0 bottom-14 z-[45] pointer-events-auto"
+            className="fixed top-0 left-0 right-0 bottom-14 z-[55] pointer-events-auto"
             onClick={() => {
               setIsInputOpen(false);
               setIsVoiceOpen(false);
@@ -746,7 +744,7 @@ export function Roundtable({
 
         {/* ── Center stack: input / voice / thinking — anchored above toolbar ── */}
         <div
-          className="fixed bottom-14 left-0 z-[50] flex flex-col items-center justify-center gap-3 pointer-events-none transition-[right] duration-300"
+          className="fixed bottom-14 left-0 z-[60] flex flex-col items-center justify-center gap-3 pointer-events-none transition-[right] duration-300"
           style={{ right: chatCollapsed === false ? (chatAreaWidth ?? 320) : 0 }}
         >
           {/* Input panel */}
@@ -1272,7 +1270,7 @@ export function Roundtable({
                   animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
                   exit={{ opacity: 0, scale: 0.95, y: 15, filter: 'blur(4px)' }}
                   onClick={(e) => e.stopPropagation()}
-                  className="absolute inset-x-3 sm:inset-x-6 bottom-8 sm:bottom-4 z-40 flex items-center justify-end"
+                  className="absolute inset-x-3 sm:inset-x-6 bottom-8 sm:bottom-4 z-[60] flex items-center justify-end"
                 >
                   <div className="relative w-full max-md:max-w-full md:w-fit md:max-w-[85%] lg:max-w-[65%] min-w-0 md:min-w-[200px] lg:min-w-[300px] bg-white/90 dark:bg-gray-800/90 backdrop-blur-md p-2 pr-2 rounded-2xl rounded-br-none shadow-2xl border border-purple-200 dark:border-purple-700 flex items-end gap-2 ring-1 ring-purple-100/50 dark:ring-purple-800/50">
                     <div className="pl-4 flex-1 py-1 min-w-0">
@@ -1325,7 +1323,7 @@ export function Roundtable({
                   animate={{ opacity: 1, scale: 1, x: 0, filter: 'blur(0px)' }}
                   exit={{ opacity: 0, scale: 0.9, x: 20, filter: 'blur(4px)' }}
                   onClick={(e) => e.stopPropagation()}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 z-50 flex items-center gap-4 pr-2 pointer-events-none"
+                  className="absolute right-4 top-1/2 -translate-y-1/2 z-[60] flex items-center gap-4 pr-2 pointer-events-none"
                 >
                   <div className="flex flex-col-reverse items-end gap-1 mr-[-10px] relative z-40">
                     <div className="flex items-center gap-0.5 h-8 px-2 py-1.5 bg-white/80 dark:bg-gray-800/80 backdrop-blur-md rounded-xl border border-purple-100 dark:border-purple-800 shadow-sm">
