@@ -373,10 +373,15 @@ export function Roundtable({
 
   const handleToggleInput = () => {
     if (isSendCooldown) return;
+    const opening = !isInputOpen;
     if (!isInputOpen) {
       onInputActivate?.();
     }
     setIsInputOpen(!isInputOpen);
+    // Mobile: close the "提问与同伴" drawer so the center stage input is visible on top
+    if (opening && !isMdUp) {
+      setMobileInteractionOpen(false);
+    }
     // Cancel any in-flight ASR to prevent ghost auto-sends
     if (isVoiceOpen || isProcessing) {
       cancelRecording();
@@ -395,6 +400,9 @@ export function Roundtable({
       onInputActivate?.();
       setIsVoiceOpen(true);
       setIsInputOpen(false);
+      if (!isMdUp) {
+        setMobileInteractionOpen(false);
+      }
       startRecording();
     }
   };
