@@ -18,6 +18,8 @@ export async function GET(
       headers: {
         'Content-Type': 'text/html; charset=utf-8',
         'Cache-Control': 'public, max-age=3600',
+        // Allow embedding in an iframe for cross-origin isolation
+        'X-Frame-Options': 'SAMEORIGIN',
       },
     });
   } catch (error) {

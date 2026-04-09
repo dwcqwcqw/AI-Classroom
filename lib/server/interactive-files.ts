@@ -4,6 +4,7 @@ import { getR2 } from '@/lib/server/cloudflare-r2';
 
 export interface InteractiveFileMeta {
   id: string;
+  fileKey: string;
   title: string;
   titleEn: string;
   description: string;
@@ -23,6 +24,7 @@ export async function ensureInteractiveTables(db: ReturnType<typeof getD1>) {
     .prepare(
       `CREATE TABLE IF NOT EXISTS ${INTERACTIVE_TABLE} (
         id TEXT PRIMARY KEY,
+        file_key TEXT UNIQUE,
         title TEXT NOT NULL,
         title_en TEXT NOT NULL DEFAULT '',
         description TEXT NOT NULL DEFAULT '',
@@ -35,9 +37,18 @@ export async function ensureInteractiveTables(db: ReturnType<typeof getD1>) {
       )`,
     )
     .run();
+  // Add file_key column if it doesn't exist (migration from old schema)
+  try {
+    await db
+      .prepare(`ALTER TABLE ${INTERACTIVE_TABLE} ADD COLUMN file_key TEXT UNIQUE`)
+      .run();
+  } catch {
+    // column already exists
+  }
 }
 
 export async function putInteractiveFile(input: {
+  fileKey?: string;
   title: string;
   titleEn: string;
   description: string;
@@ -69,11 +80,12 @@ export async function putInteractiveFile(input: {
   await db
     .prepare(
       `INSERT OR REPLACE INTO ${INTERACTIVE_TABLE}
-       (id, title, title_en, description, description_en, object_key, size_bytes, thumbnail_key, sort_order, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       (id, file_key, title, title_en, description, description_en, object_key, size_bytes, thumbnail_key, sort_order, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       id,
+      input.fileKey ?? null,
       input.title,
       input.titleEn,
       input.description,
@@ -116,6 +128,7 @@ export async function listInteractiveFiles(): Promise<InteractiveFileMeta[]> {
 
   return results.map((r) => ({
     id: r.id,
+    fileKey: r.file_key ?? '',
     title: r.title,
     titleEn: r.title_en,
     description: r.description,
@@ -183,17 +196,19 @@ async function readR2ObjectBytes(object: unknown): Promise<ArrayBuffer> {
   throw new Error('R2 object body is not readable');
 }
 
-export async function getInteractiveFile(id: string) {
+export async function getInteractiveFile(lookupKey: string) {
   const db = getD1();
   const r2 = getR2();
   if (!db || !r2) return null;
   await ensureInteractiveTables(db);
 
+  // Try UUID lookup first, then file_key lookup
   const row = await db
-    .prepare(`SELECT * FROM ${INTERACTIVE_TABLE} WHERE id = ?`)
-    .bind(id)
+    .prepare(`SELECT * FROM ${INTERACTIVE_TABLE} WHERE id = ? OR file_key = ? LIMIT 1`)
+    .bind(lookupKey, lookupKey)
     .first<{
       id: string;
+      file_key: string | null;
       title: string;
       title_en: string;
       description: string;
@@ -220,6 +235,7 @@ export async function getInteractiveFile(id: string) {
   return {
     meta: {
       id: row.id,
+      fileKey: row.file_key ?? '',
       title: row.title,
       titleEn: row.title_en,
       description: row.description,

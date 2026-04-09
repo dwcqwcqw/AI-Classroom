@@ -10,6 +10,7 @@ import { cn } from '@/lib/utils';
 
 interface InteractiveFile {
   id: string;
+  fileKey: string;
   title: string;
   titleEn: string;
   description: string;
@@ -45,7 +46,7 @@ interface InteractiveCardProps {
   file: InteractiveFile;
   index: number;
   locale: string;
-  onOpen: (id: string) => void;
+  onOpen: (fileKey: string, id: string) => void;
 }
 
 function InteractiveCard({ file, index, locale, onOpen }: InteractiveCardProps) {
@@ -68,10 +69,10 @@ function InteractiveCard({ file, index, locale, onOpen }: InteractiveCardProps) 
           'transition-all duration-300 hover:-translate-y-1 hover:shadow-xl hover:shadow-purple-500/10',
           'hover:border-purple-400/50',
         )}
-        onClick={() => onOpen(file.id)}
+        onClick={() => onOpen(file.fileKey, file.id)}
         role="button"
         tabIndex={0}
-        onKeyDown={(e) => e.key === 'Enter' && onOpen(file.id)}
+        onKeyDown={(e) => e.key === 'Enter' && onOpen(file.fileKey, file.id)}
       >
         {/* Preview area */}
         <div
@@ -119,7 +120,7 @@ function InteractiveCard({ file, index, locale, onOpen }: InteractiveCardProps) 
 
       {/* Open in new tab */}
       <Link
-        href={`/api/interactive/files/${encodeURIComponent(file.id)}`}
+        href={`/api/interactive/files/${encodeURIComponent(file.fileKey || file.id)}`}
         target="_blank"
         rel="noreferrer"
         onClick={(e) => e.stopPropagation()}
@@ -180,8 +181,9 @@ export default function InteractivePage() {
       .finally(() => setLoading(false));
   }, []);
 
-  const handleOpen = (id: string) => {
-    const url = `/api/interactive/files/${encodeURIComponent(id)}`;
+  const handleOpen = (fileKey: string, id: string) => {
+    const key = fileKey || id;
+    const url = `/api/interactive/files/${encodeURIComponent(key)}`;
     window.open(url, '_blank', 'noopener,noreferrer');
   };
 

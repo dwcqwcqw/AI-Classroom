@@ -85,6 +85,7 @@ interface ActiveNode {
 
 export class AudioPlayer {
   private active: ActiveNode | null = null;
+  private htmlAudio: HTMLAudioElement | null = null;
   private onEndedCallback: (() => void) | null = null;
   private muted: boolean = false;
   private volume: number = 1;
@@ -147,6 +148,25 @@ export class AudioPlayer {
     }
   }
 
+  private stopHtmlAudio(): void {
+    if (this.htmlAudio) {
+      this.htmlAudio.pause();
+      this.htmlAudio.src = '';
+      this.htmlAudio.removeEventListener('ended', this._htmlEndedHandler);
+      this.htmlAudio.removeEventListener('error', this._htmlErrorHandler);
+      this.htmlAudio = null;
+    }
+  }
+
+  // Bound handlers so we can remove them reliably
+  private _htmlEndedHandler = () => {
+    this.htmlAudio = null;
+    this.onEndedCallback?.();
+  };
+  private _htmlErrorHandler = () => {
+    this.htmlAudio = null;
+  };
+
   /**
    * Play audio from a URL or R2 (via ossKey in IndexedDB).
    * Returns true if audio started, false if no audio available.
@@ -163,24 +183,26 @@ export class AudioPlayer {
       if (ctx) {
         let bytes: ArrayBuffer | null = null;
 
-        // Priority 1: Server-generated audio URL from action
-        if (options.audioUrl) {
-          try {
-            bytes = await fetchAudioBytes(options.audioUrl);
-          } catch (e) {
-            log.warn('Audio URL fetch failed:', e);
-          }
-        }
-
-        // Priority 2: R2 URL from IndexedDB
-        if (!bytes) {
-          const record = audioId ? await db.audioFiles.get(audioId).catch(() => undefined) : undefined;
+        // Priority 1: Pre-generated audio URL from R2 (audioId via IndexedDB lookup)
+        // This handles all pre-generated lecture audio stored in R2.
+        // We skip audioUrl if audioId is provided (R2 takes precedence for pre-generated audio).
+        if (audioId) {
+          const record = await db.audioFiles.get(audioId).catch(() => undefined);
           if (record?.ossKey) {
             try {
               bytes = await fetchAudioBytes(record.ossKey);
             } catch (e) {
               log.warn('R2 audio fetch failed:', e);
             }
+          }
+        }
+
+        // Priority 2: Server-generated audio URL (if no R2 audio found)
+        if (!bytes && options.audioUrl) {
+          try {
+            bytes = await fetchAudioBytes(options.audioUrl);
+          } catch (e) {
+            log.warn('Audio URL fetch failed:', e);
           }
         }
 
@@ -193,9 +215,9 @@ export class AudioPlayer {
         }
       }
 
-      await this.generateFallbackAudio(audioId, options);
-
-      // ── HTMLAudioElement fallback ───────────────────────────────────────────
+      // ── Fallback: HTMLAudioElement (no TTS generation for playback) ─────────
+      // Only play pre-generated audio — do not generate TTS for lecture content.
+      // TTS generation is reserved for real-time Q&A/discussion only.
       return this.playWithHTMLAudio(audioId, options.audioUrl);
     } catch (error) {
       log.error('Failed to play audio:', error);
@@ -203,17 +225,22 @@ export class AudioPlayer {
     }
   }
 
-  /** HTMLAudioElement fallback - only uses ossKey URL */
+  /** HTMLAudioElement fallback - only plays pre-generated audio (no TTS generation) */
   private async playWithHTMLAudio(audioId: string, audioUrl?: string): Promise<boolean> {
+    // Stop any previously playing HTMLAudio before starting a new one
+    this.stopHtmlAudio();
+
     let src: string | null = null;
 
-    if (audioUrl) {
-      src = audioUrl;
-    } else if (audioId) {
+    if (audioId) {
       const record = await db.audioFiles.get(audioId).catch(() => undefined);
       if (record?.ossKey) {
         src = record.ossKey;
       }
+    }
+
+    if (!src && audioUrl) {
+      src = audioUrl;
     }
 
     if (!src) return false;
@@ -222,20 +249,20 @@ export class AudioPlayer {
       const audio = document.createElement('audio');
       audio.setAttribute('playsinline', '');
       audio.preload = 'auto';
+      audio.volume = this.muted ? 0 : this.volume;
 
-      audio.addEventListener('ended', () => {
-        this.onEndedCallback?.();
-      });
-      audio.addEventListener('error', () => {
-        reject(new Error('HTMLAudio playback error'));
-      });
+      audio.addEventListener('ended', this._htmlEndedHandler);
+      audio.addEventListener('error', this._htmlErrorHandler);
 
       audio.src = src!;
-      audio.volume = this.muted ? 0 : this.volume;
+      this.htmlAudio = audio;
 
       audio.play()
         .then(() => resolve(true))
-        .catch((e) => reject(e));
+        .catch((e) => {
+          this.htmlAudio = null;
+          reject(e);
+        });
     });
   }
 
@@ -297,38 +324,50 @@ export class AudioPlayer {
   }
 
   public pause(): void {
-    if (!this.active) return;
-    const ctx = getAudioContext();
-    if (!ctx) return;
-
-    const elapsed = ctx.currentTime - this.active.startedAt;
-    this.active.pausedAt = elapsed;
-    try { this.active.source.stop(); } catch { /* ignore */ }
-    // Keep active so resume() knows the buffer + offset
+    // Web Audio API path
+    if (this.active) {
+      const ctx = getAudioContext();
+      if (ctx) {
+        const elapsed = ctx.currentTime - this.active.startedAt;
+        this.active.pausedAt = elapsed;
+        try { this.active.source.stop(); } catch { /* ignore */ }
+        // Keep active so resume() knows the buffer + offset
+      }
+    }
+    // HTMLAudioElement path
+    if (this.htmlAudio) {
+      try { this.htmlAudio.pause(); } catch { /* ignore */ }
+    }
   }
 
   public resume(): void {
-    if (!this.active || this.active.pausedAt === null) return;
-    const offset = this.active.pausedAt;
-    const buffer = this.active.buffer;
-    // Clear active first so startBuffer doesn't try to stop a stopped source
-    this.active = null;
-    ensureContextRunning().then(() => {
-      this.startBuffer(buffer, offset);
-    });
+    // Web Audio API path
+    if (this.active && this.active.pausedAt !== null) {
+      const offset = this.active.pausedAt;
+      const buffer = this.active.buffer;
+      this.active = null;
+      ensureContextRunning().then(() => {
+        this.startBuffer(buffer, offset);
+      });
+    }
+    // HTMLAudioElement path — no reliable resume without pre-buffering
   }
 
   public stop(): void {
     this.stopActiveNode();
+    this.stopHtmlAudio();
   }
 
   public isPlaying(): boolean {
-    if (!this.active) return false;
-    return this.active.pausedAt === null;
+    if (this.active) return this.active.pausedAt === null;
+    if (this.htmlAudio) {
+      try { return !this.htmlAudio.paused; } catch { return false; }
+    }
+    return false;
   }
 
   public hasActiveAudio(): boolean {
-    return this.active !== null;
+    return this.active !== null || this.htmlAudio !== null;
   }
 
   public getCurrentTime(): number {
@@ -353,6 +392,9 @@ export class AudioPlayer {
     if (this.active) {
       this.active.gainNode.gain.value = muted ? 0 : this.volume;
     }
+    if (this.htmlAudio) {
+      this.htmlAudio.volume = muted ? 0 : this.volume;
+    }
   }
 
   public setVolume(volume: number): void {
@@ -360,12 +402,18 @@ export class AudioPlayer {
     if (this.active && !this.muted) {
       this.active.gainNode.gain.value = this.volume;
     }
+    if (this.htmlAudio && !this.muted) {
+      this.htmlAudio.volume = this.volume;
+    }
   }
 
   public setPlaybackRate(rate: number): void {
     this.playbackRate = Math.max(0.5, Math.min(2, rate));
     if (this.active) {
       this.active.source.playbackRate.value = this.playbackRate;
+    }
+    if (this.htmlAudio) {
+      this.htmlAudio.playbackRate = this.playbackRate;
     }
   }
 

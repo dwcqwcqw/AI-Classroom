@@ -74,6 +74,52 @@ const initialFormState: FormState = {
   sceneCounts: {},
 };
 
+// Map each interactive item key to its R2 file URL
+const INTERACTIVE_ITEMS = [
+  {
+    key: 'typhoon-structure',
+    href: '/api/interactive/files/typhoon-structure',
+    emoji: '🌀',
+    label: '台风结构',
+    gradient: 'from-blue-500/20 to-red-600/20',
+  },
+  {
+    key: 'satellite',
+    href: '/api/interactive/files/satellite',
+    emoji: '🌍',
+    label: '卫星轨道',
+    gradient: 'from-purple-500/20 to-blue-600/20',
+  },
+  {
+    key: 'lightning-hail',
+    href: '/api/interactive/files/lightning-hail',
+    emoji: '⚡',
+    label: '雷电冰雹',
+    gradient: 'from-yellow-500/20 to-orange-600/20',
+  },
+  {
+    key: 'coriolis',
+    href: '/api/interactive/files/coriolis',
+    emoji: '🌪️',
+    label: '风的偏转',
+    gradient: 'from-teal-500/20 to-green-600/20',
+  },
+  {
+    key: 'typhoon-config',
+    href: '/api/interactive/files/typhoon-config',
+    emoji: '🔧',
+    label: '调配台风',
+    gradient: 'from-orange-500/20 to-red-600/20',
+  },
+  {
+    key: 'pressure-wind',
+    href: '/api/interactive/files/pressure-wind',
+    emoji: '🌡️',
+    label: '气压风速',
+    gradient: 'from-cyan-500/20 to-blue-600/20',
+  },
+];
+
 function HomePage() {
   const { t, locale, setLocale } = useI18n();
   const { theme, setTheme } = useTheme();
@@ -787,52 +833,17 @@ function HomePage() {
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
-          {[
-            {
-              href: '/interactive',
-              emoji: '🌀',
-              label: '台风结构',
-              gradient: 'from-blue-500/20 to-red-600/20',
-            },
-            {
-              href: '/interactive',
-              emoji: '🌍',
-              label: '卫星轨道',
-              gradient: 'from-purple-500/20 to-blue-600/20',
-            },
-            {
-              href: '/interactive',
-              emoji: '⚡',
-              label: '雷电冰雹',
-              gradient: 'from-yellow-500/20 to-orange-600/20',
-            },
-            {
-              href: '/interactive',
-              emoji: '🌪️',
-              label: '风的偏转',
-              gradient: 'from-teal-500/20 to-green-600/20',
-            },
-            {
-              href: '/interactive',
-              emoji: '🔧',
-              label: '调配台风',
-              gradient: 'from-orange-500/20 to-red-600/20',
-            },
-            {
-              href: '/interactive',
-              emoji: '🌡️',
-              label: '气压风速',
-              gradient: 'from-cyan-500/20 to-blue-600/20',
-            },
-          ].map((item, i) => (
+          {INTERACTIVE_ITEMS.map((item, i) => (
             <motion.div
-              key={item.label}
+              key={item.key}
               initial={{ opacity: 0, y: 16 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.5 + i * 0.06, duration: 0.35, ease: 'easeOut' }}
             >
               <Link
                 href={item.href}
+                target="_blank"
+                rel="noreferrer"
                 className={cn(
                   'group flex flex-col items-center justify-center gap-2',
                   'rounded-2xl border border-border bg-gradient-to-br p-4',
