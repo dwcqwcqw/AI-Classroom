@@ -1,3 +1,6 @@
+import { createLogger } from '@/lib/logger';
+const log = createLogger('InteractiveFiles');
+
 import { randomUUID } from 'crypto';
 import { getD1 } from '@/lib/server/cloudflare-d1';
 import { getR2 } from '@/lib/server/cloudflare-r2';
@@ -183,10 +186,33 @@ export async function listInteractiveFiles(): Promise<InteractiveFileMeta[]> {
   }));
 }
 
-export async function getInteractiveFile(lookupKey: string) {
+export interface InteractiveFileResult {
+  html: string;
+  meta: InteractiveFileMeta;
+  /** 调试诊断信息 */
+  _diagnostic: {
+    lookupKey: string;
+    dbFound: boolean;
+    dbRow: { id: string; file_key: string | null; object_key: string } | null;
+    r2ObjectFound: boolean;
+    r2ObjectKey: string | null;
+    htmlReadSuccess: boolean;
+    htmlLength: number;
+    exitReason: string;
+  };
+}
+
+export async function getInteractiveFile(lookupKey: string): Promise<InteractiveFileResult | null> {
   const db = getD1();
   const r2 = getR2();
-  if (!db || !r2) return null;
+
+  log.info(`[InteractiveFiles] lookup key="${lookupKey}" db=${!!db} r2=${!!r2}`);
+
+  if (!db || !r2) {
+    log.error('[InteractiveFiles] D1 or R2 not available', { db: !!db, r2: !!r2 });
+    return null;
+  }
+
   await ensureInteractiveTables(db);
 
   type Row = {
@@ -203,29 +229,67 @@ export async function getInteractiveFile(lookupKey: string) {
     created_at: number;
   };
 
-  // id, then stable slug (file_key)
-  let row = await db
-    .prepare(`SELECT * FROM ${INTERACTIVE_TABLE} WHERE id = ? OR file_key = ? LIMIT 1`)
+  const diagnostic: InteractiveFileResult['_diagnostic'] = {
+    lookupKey,
+    dbFound: false,
+    dbRow: null,
+    r2ObjectFound: false,
+    r2ObjectKey: null,
+    htmlReadSuccess: false,
+    htmlLength: 0,
+    exitReason: 'unknown',
+  };
+
+  // ── 路径 1：直接查 D1（id 或 file_key）─────────────────────────────────
+  let row: Row | null | undefined = await db
+    .prepare(`SELECT id, file_key, object_key FROM ${INTERACTIVE_TABLE} WHERE id = ? OR file_key = ? LIMIT 1`)
     .bind(lookupKey, lookupKey)
     .first<Row>();
 
-  // Legacy rows: slug was never written to file_key; match curated sort_order from migration order
-  const slugSort = CURATED_SLUG_SORT_ORDER[lookupKey];
-  if (!row && slugSort !== undefined) {
-    row = await db
-      .prepare(
-        `SELECT * FROM ${INTERACTIVE_TABLE} WHERE sort_order = ? ORDER BY created_at ASC LIMIT 1`,
-      )
-      .bind(slugSort)
-      .first<Row>();
+  if (row) {
+    diagnostic.dbFound = true;
+    diagnostic.dbRow = { id: row.id, file_key: row.file_key, object_key: row.object_key };
+    log.info(`[InteractiveFiles] D1 hit: id="${row.id}" file_key="${row.file_key ?? ''}" object_key="${row.object_key}"`);
   }
 
+  // ── 路径 2：slug 回退（sort_order 匹配）──────────────────────────────
+  const slugSort = CURATED_SLUG_SORT_ORDER[lookupKey];
+  if (!row && slugSort !== undefined) {
+    log.info(`[InteractiveFiles] slug 回退: sort_order=${slugSort} for "${lookupKey}"`);
+    row = await db
+      .prepare(`SELECT id, file_key, object_key FROM ${INTERACTIVE_TABLE} WHERE sort_order = ? ORDER BY created_at ASC LIMIT 1`)
+      .bind(slugSort)
+      .first<Row>();
+    if (row) {
+      diagnostic.dbFound = true;
+      diagnostic.dbRow = { id: row.id, file_key: row.file_key, object_key: row.object_key };
+      log.info(`[InteractiveFiles] sort_order 回退命中: id="${row.id}" object_key="${row.object_key}"`);
+    }
+  }
+
+  // ── 路径 3：UUID 直读 R2 ───────────────────────────────────────────
   if (row) {
+    // 已有 D1 行，读对应 object_key
+    diagnostic.r2ObjectKey = row.object_key;
     const object = await r2.get(row.object_key);
-    if (!object) return null;
+    if (!object) {
+      log.error(`[InteractiveFiles] R2 对象不存在: ${row.object_key}`);
+      diagnostic.exitReason = 'r2_object_not_found_by_object_key';
+      return null;
+    }
+    diagnostic.r2ObjectFound = true;
     const html = await readHtmlFromR2Object(object);
-    if (!html) return null;
+    if (!html) {
+      log.error(`[InteractiveFiles] R2 对象读取失败（text/arrayBuffer 都失败）: ${row.object_key}`);
+      diagnostic.exitReason = 'r2_read_failed';
+      return null;
+    }
+    diagnostic.htmlReadSuccess = true;
+    diagnostic.htmlLength = html.length;
+    diagnostic.exitReason = 'success_d1_row';
+    log.info(`[InteractiveFiles] 成功: html.length=${html.length}`);
     return {
+      html,
       meta: {
         id: row.id,
         fileKey: row.file_key ?? '',
@@ -238,19 +302,35 @@ export async function getInteractiveFile(lookupKey: string) {
         thumbnailKey: row.thumbnail_key,
         sortOrder: Number(row.sort_order),
         createdAt: Number(row.created_at),
-      } as InteractiveFileMeta,
-      html,
+      },
+      _diagnostic: diagnostic,
     };
   }
 
-  // R2-only or D1 row missing: object key is always interactive/{uuid}.html
+  // 没有 D1 行：检查是否是 UUID 格式
   if (isR2InteractiveUuid(lookupKey)) {
     const objectKey = `interactive/${lookupKey}.html`;
+    diagnostic.r2ObjectKey = objectKey;
+    log.info(`[InteractiveFiles] UUID 模式直接读 R2: ${objectKey}`);
     const object = await r2.get(objectKey);
-    if (!object) return null;
+    if (!object) {
+      log.error(`[InteractiveFiles] UUID 直读 R2 失败，对象不存在: ${objectKey}`);
+      diagnostic.exitReason = 'uuid_r2_not_found';
+      return null;
+    }
+    diagnostic.r2ObjectFound = true;
     const html = await readHtmlFromR2Object(object);
-    if (!html) return null;
+    if (!html) {
+      log.error(`[InteractiveFiles] UUID 直读 R2 文本解析失败: ${objectKey}`);
+      diagnostic.exitReason = 'uuid_r2_read_failed';
+      return null;
+    }
+    diagnostic.htmlReadSuccess = true;
+    diagnostic.htmlLength = html.length;
+    diagnostic.exitReason = 'success_uuid_r2_direct';
+    log.info(`[InteractiveFiles] UUID 直读成功: html.length=${html.length}`);
     return {
+      html,
       meta: {
         id: lookupKey,
         fileKey: '',
@@ -263,10 +343,13 @@ export async function getInteractiveFile(lookupKey: string) {
         thumbnailKey: null,
         sortOrder: 0,
         createdAt: 0,
-      } as InteractiveFileMeta,
-      html,
+      },
+      _diagnostic: diagnostic,
     };
   }
 
+  // 完全找不到
+  log.error(`[InteractiveFiles] 未找到: lookupKey="${lookupKey}" 既无 D1 行也无 UUID`);
+  diagnostic.exitReason = 'not_found';
   return null;
 }
