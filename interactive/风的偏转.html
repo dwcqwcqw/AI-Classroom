@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>不同纬度的科里奥利力与气旋模拟</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #0f172a; color: #e2e8f0; font-family: sans-serif; }
+        .latex-container { background: rgba(30, 41, 59, 0.8); border-radius: 0.5rem; padding: 0.75rem; margin-top: 1rem; border: 1px solid #334155; }
+        input[type=range] {
+            -webkit-appearance: none; width: 100%; background: transparent;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none; height: 20px; width: 20px; border-radius: 50%; background: #38bdf8; cursor: pointer; margin-top: -8px; box-shadow: 0 0 10px rgba(56, 189, 248, 0.5);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%; height: 4px; cursor: pointer; background: #475569; border-radius: 2px;
+        }
+        #sim-container { position: relative; width: 100%; height: 100%; border-radius: 0.5rem; overflow: hidden; background: #020617; box-shadow: inset 0 0 50px rgba(0,0,0,0.8); }
+        canvas { display: block; }
+    </style>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const katexOptions = {
+        delimiters: [
+            {left: '\\[', right: '\\]', display: true},
+            {left: '\\(', right: '\\)', display: false},
+            {left: '$$', right: '$$', display: true},
+            {left: '$', right: '$', display: false}
+        ],
+        throwOnError: false,
+        strict: false,
+        trust: true
+    };
+
+    let renderTimeout;
+    function safeRender() {
+        if (renderTimeout) clearTimeout(renderTimeout);
+        renderTimeout = setTimeout(() => {
+            renderMathInElement(document.body, katexOptions);
+        }, 100);
+    }
+
+    renderMathInElement(document.body, katexOptions);
+
+    const observer = new MutationObserver((mutations) => {
+        let shouldRender = false;
+        mutations.forEach((mutation) => {
+            if (mutation.target &&
+                mutation.target.className &&
+                typeof mutation.target.className === 'string' &&
+                mutation.target.className.includes('katex')) {
+                return;
+            }
+            shouldRender = true;
+        });
+
+        if (shouldRender) {
+            safeRender();
+        }
+    });
+
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: true
+    });
+
+    setInterval(() => {
+        const text = document.body.innerText;
+        if (text.includes('\\(') || text.includes('$$')) {
+            safeRender();
+        }
+    }, 2000);
+});
+</script>
+</head>
+<body class="flex h-screen w-screen flex-col selection:bg-sky-500/30 overflow-hidden">
+
+    <!-- 模拟区域 - Top on mobile -->
+    <div class="relative flex-shrink-0 border-b border-slate-700" style="height: 45vh; min-height: 280px;">
+        <div class="absolute top-3 left-3 sm:top-8 sm:left-8 z-10 pointer-events-none">
+            <h2 class="text-base sm:text-xl font-bold tracking-wider text-slate-200 drop-shadow-md">气流轨迹模拟</h2>
+            <p id="sim-desc" class="text-[10px] sm:text-sm text-sky-300 mt-0.5 sm:mt-1 drop-shadow">偏向力向右，形成逆时针旋转的闭合漩涡</p>
+        </div>
+        <div id="sim-container" class="w-full h-full">
+            <canvas id="sim-canvas"></canvas>
+            <!-- 中心低压 L 标记 -->
+            <div class="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-10 h-10 sm:w-12 sm:h-12 bg-rose-500/20 rounded-full border border-rose-500/50 flex items-center justify-center shadow-[0_0_30px_rgba(244,63,94,0.3)] pointer-events-none">
+                <span class="text-rose-500 font-bold text-lg sm:text-xl drop-shadow-lg">L</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 控制面板 - Bottom on mobile -->
+    <div class="flex-1 flex flex-col sm:flex-row overflow-hidden">
+        
+        <!-- 左侧控制面板 - 桌面端侧边栏 -->
+        <div class="hidden sm:flex w-full sm:w-1/3 min-w-[300px] max-w-[400px] p-4 flex-col h-full bg-slate-900 border-r border-slate-700 z-10 shadow-2xl overflow-y-auto">
+            <h1 class="text-xl font-bold text-sky-400 mb-1">科里奥利力与气旋成型</h1>
+            <p class="text-xs text-slate-400 mb-4">探究地转偏向力如何随纬度改变</p>
+
+            <!-- 交互控制：纬度滑块 -->
+            <div class="mb-6">
+                <div class="flex justify-between items-end mb-2">
+                    <label class="text-sm font-semibold text-slate-300">纬度 (\(\varphi\))</label>
+                    <span id="lat-display" class="text-lg font-mono font-bold text-sky-400">30° N</span>
+                </div>
+                <input type="range" id="lat-slider" min="-90" max="90" value="30" class="w-full">
+                <div class="flex justify-between text-[10px] text-slate-500 mt-1">
+                    <span>90°S</span><span>0°</span><span>90°N</span>
+                </div>
+            </div>
+
+            <!-- 物理状态仪表盘 -->
+            <div class="grid grid-cols-2 gap-3 mb-4">
+                <div class="bg-slate-800 rounded-lg p-3 flex flex-col items-center border border-slate-700">
+                    <span class="text-[10px] text-slate-400 mb-1">|sin(φ)|</span>
+                    <div class="relative w-20 h-10 overflow-hidden">
+                        <canvas id="gauge-canvas" width="80" height="40"></canvas>
+                    </div>
+                    <span id="force-value" class="text-base font-mono font-bold text-emerald-400 mt-1">0.50</span>
+                </div>
+                <div class="bg-slate-800 rounded-lg p-3 flex flex-col items-center justify-center border border-slate-700">
+                    <span class="text-[10px] text-slate-400 mb-1">系统状态</span>
+                    <span id="system-status" class="text-sm font-bold text-sky-300 text-center">逆时针气旋</span>
+                </div>
+            </div>
+
+            <!-- 地球侧视图 -->
+            <div class="flex justify-center mb-4">
+                <canvas id="earth-canvas" width="120" height="120"></canvas>
+            </div>
+
+            <!-- 科学原理解释 -->
+            <div class="latex-container flex-grow text-[10px] text-slate-300">
+                <h3 class="text-xs font-bold text-sky-400 mb-1">核心机制</h3>
+                <p class="mb-1">1. <strong>气压梯度力</strong>：\( F_p = -\frac{1}{\rho}\nabla P \)</p>
+                <p class="mb-1">2. <strong>科里奥利力</strong>：\( F_H = 2m\Omega v \sin(\varphi) \)</p>
+                <p>赤道附近 \(\sin\varphi\approx0\)，无法形成气旋。</p>
+            </div>
+        </div>
+
+        <!-- Mobile Controls - Only on mobile -->
+        <div class="sm:hidden flex-1 p-3 overflow-y-auto">
+            <!-- 标题 -->
+            <h1 class="text-lg font-bold text-sky-400 mb-1">科里奥利力与气旋成型</h1>
+            <p class="text-[10px] text-slate-400 mb-3">探究地转偏向力如何随纬度改变</p>
+
+            <!-- 纬度滑块 -->
+            <div class="mb-3">
+                <div class="flex justify-between items-center mb-1">
+                    <label class="text-xs font-semibold text-slate-300">纬度 (\(\varphi\))</label>
+                    <span id="lat-display-mobile" class="text-base font-mono font-bold text-sky-400">30° N</span>
+                </div>
+                <input type="range" id="lat-slider-mobile" min="-90" max="90" value="30" class="w-full">
+                <div class="flex justify-between text-[9px] text-slate-500 mt-1">
+                    <span>90°S</span><span>0°</span><span>90°N</span>
+                </div>
+            </div>
+
+            <!-- 偏向力相对大小仪表 -->
+            <div class="bg-slate-800 rounded-lg p-3 mb-3 border border-slate-700">
+                <div class="flex justify-between items-center mb-2">
+                    <span class="text-[10px] text-slate-400">偏向力相对大小</span>
+                    <span id="force-value-mobile" class="text-lg font-mono font-bold text-emerald-400">0.50</span>
+                </div>
+                <div class="relative w-full h-6 bg-slate-900 rounded-full overflow-hidden">
+                    <div id="force-bar-mobile" class="absolute inset-y-0 left-0 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full transition-all duration-300" style="width: 50%;"></div>
+                </div>
+                <div class="flex justify-between text-[8px] text-slate-500 mt-1">
+                    <span>弱</span><span>中</span><span>强</span>
+                </div>
+            </div>
+
+            <!-- 状态卡片 -->
+            <div class="grid grid-cols-2 gap-2 mb-3">
+                <div class="bg-slate-800 rounded-lg p-2 flex flex-col items-center justify-center border border-slate-700">
+                    <span class="text-[9px] text-slate-400">|sin(φ)|</span>
+                    <span id="system-status-mobile" class="text-sm font-bold text-sky-300">逆时针气旋</span>
+                </div>
+                <div class="bg-slate-800 rounded-lg p-2 flex flex-col items-center justify-center border border-slate-700">
+                    <span class="text-[9px] text-slate-400">旋转方向</span>
+                    <span id="spin-indicator" class="text-sm font-bold text-cyan-400">北半球逆时针</span>
+                </div>
+            </div>
+
+            <!-- 地球侧视图 -->
+            <div class="flex justify-center mb-3">
+                <canvas id="earth-canvas-mobile" width="100" height="100"></canvas>
+            </div>
+
+            <!-- 核心物理机制 -->
+            <div class="bg-slate-800/80 rounded-lg p-3 border border-slate-700 mb-3">
+                <h3 class="text-xs font-bold text-sky-400 mb-2">核心物理机制</h3>
+                <div class="text-[9px] text-slate-300 space-y-1">
+                    <p><strong class="text-slate-200">气压梯度力</strong>：\( F_p = -\frac{1}{\rho}\nabla P \)</p>
+                    <p><strong class="text-slate-200">科里奥利力</strong>：\( F_H = 2m\Omega v \sin(\varphi) \)</p>
+                    <p class="text-slate-400 mt-1">赤道附近 \(\sin\varphi\approx0\)，偏向力趋于零，无法形成气旋。</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 状态管理 ---
+        const state = {
+            latitude: 30,
+            sinPhi: Math.sin(30 * Math.PI / 180)
+        };
+
+        // --- DOM 元素 ---
+        const slider = document.getElementById('lat-slider');
+        const sliderMobile = document.getElementById('lat-slider-mobile');
+        const latDisplay = document.getElementById('lat-display');
+        const latDisplayMobile = document.getElementById('lat-display-mobile');
+        const forceValueDisplay = document.getElementById('force-value');
+        const forceValueMobile = document.getElementById('force-value-mobile');
+        const forceBarMobile = document.getElementById('force-bar-mobile');
+        const systemStatusDisplay = document.getElementById('system-status');
+        const systemStatusMobile = document.getElementById('system-status-mobile');
+        const spinIndicator = document.getElementById('spin-indicator');
+        const simDesc = document.getElementById('sim-desc');
+        
+        // --- Canvas 元素 ---
+        const earthCanvas = document.getElementById('earth-canvas');
+        const earthCtx = earthCanvas.getContext('2d');
+        const earthCanvasMobile = document.getElementById('earth-canvas-mobile');
+        const earthCtxMobile = earthCanvasMobile ? earthCanvasMobile.getContext('2d') : null;
+        const gaugeCanvas = document.getElementById('gauge-canvas');
+        const gaugeCtx = gaugeCanvas.getContext('2d');
+        const simCanvas = document.getElementById('sim-canvas');
+        const simCtx = simCanvas.getContext('2d');
+
+        // --- 物理常量与模拟参数 ---
+        const SIM_PARAMS = {
+            spawnRadius: 0,
+            centerThreshold: 15,
+            pressureStrength: 0.035,
+            maxCoriolis: 0.08,
+            friction: 0.015,
+            particleCount: 600,
+            trailLength: 0.1
+        };
+
+        let particles = [];
+        let canvasWidth, canvasHeight, centerX, centerY;
+
+        // --- 初始化与响应式 ---
+        function resize() {
+            const container = document.getElementById('sim-container');
+            simCanvas.width = container.clientWidth;
+            simCanvas.height = container.clientHeight;
+            canvasWidth = simCanvas.width;
+            canvasHeight = simCanvas.height;
+            centerX = canvasWidth / 2;
+            centerY = canvasHeight / 2;
+            SIM_PARAMS.spawnRadius = Math.min(canvasWidth, canvasHeight) * 0.45;
+            initParticles();
+        }
+
+        window.addEventListener('resize', resize);
+
+        // --- 粒子系统 ---
+        class Particle {
+            constructor() {
+                this.reset(true);
+            }
+
+            reset(randomizeDist = false) {
+                const angle = Math.random() * Math.PI * 2;
+                const r = randomizeDist ? 
+                    (Math.random() * 0.5 + 0.5) * SIM_PARAMS.spawnRadius : 
+                    SIM_PARAMS.spawnRadius;
+                
+                this.x = centerX + Math.cos(angle) * r;
+                this.y = centerY + Math.sin(angle) * r;
+                this.vx = 0;
+                this.vy = 0;
+            }
+
+            update(f_coriolis) {
+                const dx = centerX - this.x;
+                const dy = centerY - this.y;
+                const dist = Math.hypot(dx, dy);
+
+                if (dist < SIM_PARAMS.centerThreshold) {
+                    this.reset();
+                    return;
+                }
+
+                const dirX = dx / dist;
+                const dirY = dy / dist;
+
+                const ax_p = dirX * SIM_PARAMS.pressureStrength;
+                const ay_p = dirY * SIM_PARAMS.pressureStrength;
+
+                const ax_c = -f_coriolis * this.vy;
+                const ay_c = f_coriolis * this.vx;
+
+                const ax_f = -this.vx * SIM_PARAMS.friction;
+                const ay_f = -this.vy * SIM_PARAMS.friction;
+
+                this.vx += (ax_p + ax_c + ax_f);
+                this.vy += (ay_p + ay_c + ay_f);
+                this.x += this.vx;
+                this.y += this.vy;
+            }
+        }
+
+        function initParticles() {
+            particles = [];
+            for (let i = 0; i < SIM_PARAMS.particleCount; i++) {
+                particles.push(new Particle());
+            }
+            simCtx.fillStyle = '#020617';
+            simCtx.fillRect(0, 0, canvasWidth, canvasHeight);
+        }
+
+        // --- 绘图函数 ---
+        function drawEarth(canvas, ctx) {
+            if (!canvas || !ctx) return;
+            const w = canvas.width;
+            const h = canvas.height;
+            const r = w / 2 - (w > 80 ? 10 : 8);
+            const cx = w / 2;
+            const cy = h / 2;
+
+            ctx.clearRect(0, 0, w, h);
+
+            ctx.beginPath();
+            ctx.arc(cx, cy, r, 0, Math.PI * 2);
+            ctx.fillStyle = '#0f172a';
+            ctx.fill();
+            ctx.strokeStyle = '#334155';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            ctx.beginPath();
+            ctx.moveTo(cx - r, cy);
+            ctx.lineTo(cx + r, cy);
+            ctx.strokeStyle = '#64748b';
+            ctx.setLineDash([5, 5]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            const latY = cy - r * state.sinPhi;
+            const lineHalfWidth = Math.sqrt(r*r - (cy-latY)*(cy-latY));
+            
+            ctx.beginPath();
+            ctx.moveTo(cx - lineHalfWidth, latY);
+            ctx.lineTo(cx + lineHalfWidth, latY);
+            ctx.strokeStyle = '#38bdf8';
+            ctx.lineWidth = 3;
+            ctx.stroke();
+            
+            ctx.beginPath();
+            ctx.arc(cx + lineHalfWidth, latY, 4, 0, Math.PI*2);
+            ctx.fillStyle = '#f8fafc';
+            ctx.fill();
+        }
+
+        function drawAllEarth() {
+            drawEarth(earthCanvas, earthCtx);
+            drawEarth(earthCanvasMobile, earthCtxMobile);
+        }
+
+        function drawGauge() {
+            const w = gaugeCanvas.width;
+            const h = gaugeCanvas.height;
+            const cx = w / 2;
+            const cy = h;
+            const r = h - 6;
+
+            gaugeCtx.clearRect(0, 0, w, h);
+
+            gaugeCtx.beginPath();
+            gaugeCtx.arc(cx, cy, r, Math.PI, 0);
+            gaugeCtx.lineWidth = 8;
+            gaugeCtx.strokeStyle = '#334155';
+            gaugeCtx.stroke();
+
+            const absSin = Math.abs(state.sinPhi);
+            const endAngle = Math.PI + (absSin * Math.PI);
+            
+            gaugeCtx.beginPath();
+            gaugeCtx.arc(cx, cy, r, Math.PI, endAngle);
+            gaugeCtx.lineWidth = 8;
+            gaugeCtx.strokeStyle = state.latitude === 0 ? '#94a3b8' : (state.latitude > 0 ? '#38bdf8' : '#f43f5e');
+            gaugeCtx.stroke();
+        }
+
+        // --- 主循环 ---
+        function animate() {
+            simCtx.fillStyle = `rgba(2, 6, 23, ${SIM_PARAMS.trailLength})`;
+            simCtx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+            const f_coriolis = SIM_PARAMS.maxCoriolis * state.sinPhi;
+
+            let pColor = '#38bdf8';
+            if (state.latitude === 0) pColor = '#94a3b8';
+            else if (state.latitude < 0) pColor = '#f43f5e';
+
+            simCtx.fillStyle = pColor;
+            
+            simCtx.strokeStyle = 'rgba(255,255,255,0.02)';
+            simCtx.beginPath();
+            simCtx.arc(centerX, centerY, SIM_PARAMS.spawnRadius * 0.7, 0, Math.PI*2);
+            simCtx.arc(centerX, centerY, SIM_PARAMS.spawnRadius * 0.4, 0, Math.PI*2);
+            simCtx.stroke();
+
+            for (let i = 0; i < particles.length; i++) {
+                const p = particles[i];
+                p.update(f_coriolis);
+                simCtx.fillRect(p.x, p.y, 1.5, 1.5);
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        // --- 交互逻辑 ---
+        function updateState(lat) {
+            state.latitude = lat;
+            state.sinPhi = Math.sin(lat * Math.PI / 180);
+
+            const absSin = Math.abs(state.sinPhi).toFixed(2);
+
+            let latText = Math.abs(lat) + '° ';
+            if (lat > 0) latText += 'N';
+            else if (lat < 0) latText += 'S';
+            else latText = '赤道 (0°)';
+            
+            // 更新桌面端显示
+            latDisplay.textContent = latText;
+            forceValueDisplay.textContent = absSin;
+
+            // 更新移动端显示
+            if (latDisplayMobile) latDisplayMobile.textContent = latText;
+            if (forceValueMobile) forceValueMobile.textContent = absSin;
+            if (forceBarMobile) {
+                const barWidth = (absSin * 100).toFixed(1);
+                forceBarMobile.style.width = barWidth + '%';
+                // 根据纬度改变颜色
+                if (lat === 0) {
+                    forceBarMobile.className = "absolute inset-y-0 left-0 bg-slate-500 rounded-full transition-all duration-300";
+                } else if (lat > 0) {
+                    forceBarMobile.className = "absolute inset-y-0 left-0 bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full transition-all duration-300";
+                } else {
+                    forceBarMobile.className = "absolute inset-y-0 left-0 bg-gradient-to-r from-rose-500 to-orange-500 rounded-full transition-all duration-300";
+                }
+            }
+
+            let statusHtml = '';
+            let spinText = '';
+            let descText = '';
+            
+            if (lat > 5) {
+                statusHtml = '逆时针气旋';
+                spinText = '北半球逆时针';
+                if (forceValueDisplay) forceValueDisplay.className = "text-base font-mono font-bold text-emerald-400 mt-1";
+                descText = "科氏力向右偏转，形成逆时针旋转的闭合漩涡。";
+            } else if (lat < -5) {
+                statusHtml = '顺时针气旋';
+                spinText = '南半球顺时针';
+                if (forceValueDisplay) forceValueDisplay.className = "text-base font-mono font-bold text-emerald-400 mt-1";
+                descText = "科氏力向左偏转，形成顺时针旋转的闭合漩涡。";
+            } else {
+                statusHtml = '无法形成气旋';
+                spinText = '赤道无偏向';
+                if (forceValueDisplay) forceValueDisplay.className = "text-base font-mono font-bold text-emerald-400 mt-1";
+                descText = "纬度接近0°，偏向力极小，气流直接向中心汇聚。";
+            }
+            
+            systemStatusDisplay.innerHTML = statusHtml;
+            if (systemStatusMobile) systemStatusMobile.textContent = statusHtml;
+            if (spinIndicator) spinIndicator.textContent = spinText;
+            simDesc.textContent = descText;
+
+            const container = document.getElementById('sim-container');
+            if(lat > 0) container.style.boxShadow = 'inset 0 0 50px rgba(14, 165, 233, 0.1)';
+            else if(lat < 0) container.style.boxShadow = 'inset 0 0 50px rgba(244, 63, 94, 0.1)';
+            else container.style.boxShadow = 'inset 0 0 50px rgba(255, 255, 255, 0.05)';
+
+            drawAllEarth();
+            drawGauge();
+        }
+
+        slider.addEventListener('input', () => {
+            updateState(parseInt(slider.value));
+            simCtx.fillStyle = 'rgba(2, 6, 23, 0.5)';
+            simCtx.fillRect(0, 0, canvasWidth, canvasHeight);
+        });
+
+        if (sliderMobile) {
+            sliderMobile.addEventListener('input', () => {
+                updateState(parseInt(sliderMobile.value));
+                simCtx.fillStyle = 'rgba(2, 6, 23, 0.5)';
+                simCtx.fillRect(0, 0, canvasWidth, canvasHeight);
+            });
+        }
+
+        resize();
+        updateState(30);
+        animate();
+
+    </script>
+</body>
+</html>

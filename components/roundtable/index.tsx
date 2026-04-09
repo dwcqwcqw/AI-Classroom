@@ -455,6 +455,7 @@ export function Roundtable({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     isInLiveFlow,
     isDiscussionPaused,
@@ -1263,7 +1264,7 @@ export function Roundtable({
                   animate={{ opacity: 1, scale: 1, y: 0, filter: 'blur(0px)' }}
                   exit={{ opacity: 0, scale: 0.95, y: 15, filter: 'blur(4px)' }}
                   onClick={(e) => e.stopPropagation()}
-                  className="absolute inset-x-6 bottom-4 z-20 flex items-center justify-end"
+                  className="absolute inset-x-3 sm:inset-x-6 bottom-8 sm:bottom-4 z-40 flex items-center justify-end"
                 >
                   <div className="relative w-full max-md:max-w-full md:w-fit md:max-w-[85%] lg:max-w-[65%] min-w-0 md:min-w-[200px] lg:min-w-[300px] bg-white/90 dark:bg-gray-800/90 backdrop-blur-md p-2 pr-2 rounded-2xl rounded-br-none shadow-2xl border border-purple-200 dark:border-purple-700 flex items-end gap-2 ring-1 ring-purple-100/50 dark:ring-purple-800/50">
                     <div className="pl-4 flex-1 py-1 min-w-0">
@@ -1316,9 +1317,9 @@ export function Roundtable({
                   animate={{ opacity: 1, scale: 1, x: 0, filter: 'blur(0px)' }}
                   exit={{ opacity: 0, scale: 0.9, x: 20, filter: 'blur(4px)' }}
                   onClick={(e) => e.stopPropagation()}
-                  className="absolute right-4 top-1/2 -translate-y-1/2 z-30 flex items-center gap-4 pr-2 pointer-events-none"
+                  className="absolute right-4 top-1/2 -translate-y-1/2 z-50 flex items-center gap-4 pr-2 pointer-events-none"
                 >
-                  <div className="flex flex-col-reverse items-end gap-1 mr-[-10px] relative z-20">
+                  <div className="flex flex-col-reverse items-end gap-1 mr-[-10px] relative z-40">
                     <div className="flex items-center gap-0.5 h-8 px-2 py-1.5 bg-white/80 dark:bg-gray-800/80 backdrop-blur-md rounded-xl border border-purple-100 dark:border-purple-800 shadow-sm">
                       <VoiceWaveformBars barClassName="bg-gradient-to-t from-purple-500 to-indigo-600 dark:from-purple-400 dark:to-indigo-500" />
                     </div>
@@ -1335,7 +1336,7 @@ export function Roundtable({
                     className="pointer-events-auto relative group cursor-pointer"
                     onClick={handleToggleVoice}
                   >
-                    <div className="relative w-16 h-16 rounded-full bg-gradient-to-br from-purple-600 to-indigo-700 dark:from-purple-500 dark:to-indigo-600 shadow-[0_4px_20px_rgba(147,51,234,0.3)] flex items-center justify-center z-20 group-hover:scale-105 transition-transform duration-300 border border-white/20 dark:border-white/10">
+                    <div className="relative w-16 h-16 rounded-full bg-gradient-to-br from-purple-600 to-indigo-700 dark:from-purple-500 dark:to-indigo-600 shadow-[0_4px_20px_rgba(147,51,234,0.3)] flex items-center justify-center z-40 group-hover:scale-105 transition-transform duration-300 border border-white/20 dark:border-white/10">
                       <Mic className="w-6 h-6 text-white" />
                     </div>
                     <div className="absolute inset-0 rounded-full border-2 border-purple-500 dark:border-purple-400 opacity-40 animate-[ping_2s_ease-in-out_infinite] z-10" />

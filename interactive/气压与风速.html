@@ -1,0 +1,567 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>台风气象要素三维探测模拟</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: system-ui, -apple-system, sans-serif; background-color: #0f172a; color: #f8fafc; overflow-x: hidden; }
+        .glass-panel { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(10px); border: 1px solid rgba(255, 255, 255, 0.1); }
+        
+        @keyframes pulse-red {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.7); background-color: rgba(239, 68, 68, 0.2); border-color: rgba(239, 68, 68, 0.8); }
+            50% { box-shadow: 0 0 20px 10px rgba(239, 68, 68, 0.4); background-color: rgba(239, 68, 68, 0.5); border-color: rgb(239, 68, 68); }
+        }
+        .alarm-active { animation: pulse-red 0.8s infinite; color: #fca5a5; }
+        
+        .zone-eye { color: #6ee7b7; border-color: #6ee7b7; }
+        .zone-eyewall { color: #fca5a5; border-color: #ef4444; }
+        .zone-outer { color: #93c5fd; border-color: #3b82f6; }
+
+        canvas { cursor: crosshair; touch-action: none; }
+        
+        /* Custom scrollbar */
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+    </style>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const katexOptions = {
+        delimiters: [
+            {left: '\\[', right: '\\]', display: true},
+            {left: '\\(', right: '\\)', display: false},
+            {left: '$$', right: '$$', display: true},
+            {left: '$', right: '$', display: false}
+        ],
+        throwOnError: false,
+        strict: false,
+        trust: true
+    };
+
+    let renderTimeout;
+    function safeRender() {
+        if (renderTimeout) clearTimeout(renderTimeout);
+        renderTimeout = setTimeout(() => {
+            renderMathInElement(document.body, katexOptions);
+        }, 100);
+    }
+
+    renderMathInElement(document.body, katexOptions);
+
+    const observer = new MutationObserver((mutations) => {
+        let shouldRender = false;
+        mutations.forEach((mutation) => {
+            if (mutation.target &&
+                mutation.target.className &&
+                typeof mutation.target.className === 'string' &&
+                mutation.target.className.includes('katex')) {
+                return;
+            }
+            shouldRender = true;
+        });
+
+        if (shouldRender) {
+            safeRender();
+        }
+    });
+
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: true
+    });
+
+    setInterval(() => {
+        const text = document.body.innerText;
+        if (text.includes('\\(') || text.includes('$$')) {
+            safeRender();
+        }
+    }, 2000);
+});
+</script>
+</head>
+<body class="min-h-screen flex flex-col">
+
+    <!-- Header -->
+    <header class="p-3 sm:p-4 border-b border-slate-700 bg-slate-900 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2 z-10 relative">
+        <div>
+            <h1 class="text-lg sm:text-2xl font-bold text-white tracking-wide">台风气象要素三维探测</h1>
+            <p class="text-slate-400 text-xs sm:text-sm mt-1">拖动侦察机穿越台风，观察风压突变规律</p>
+        </div>
+        <div class="hidden md:flex gap-4 text-xs">
+            <div class="flex items-center gap-2"><div class="w-3 h-3 rounded-full bg-blue-400"></div>外围区</div>
+            <div class="flex items-center gap-2"><div class="w-3 h-3 rounded-full bg-red-500 animate-pulse"></div>眼墙区</div>
+            <div class="flex items-center gap-2"><div class="w-3 h-3 rounded-full bg-emerald-400"></div>台风眼</div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="flex-1 flex flex-col overflow-hidden relative">
+        
+        <!-- Interactive Canvas Area - Top on mobile -->
+        <div class="relative glass-panel rounded-xl overflow-hidden flex items-center justify-center border border-slate-700" style="height: 40vh; min-height: 250px;">
+            <div class="absolute top-3 left-3 sm:top-4 sm:left-4 text-[10px] sm:text-sm text-slate-300 pointer-events-none z-10">
+                俯视图 (海平面)<br>
+                <span class="text-[9px] sm:text-xs text-slate-500">北半球逆时针气旋式辐合</span>
+            </div>
+            <canvas id="simCanvas" class="w-full h-full absolute inset-0"></canvas>
+            
+            <!-- Instructions Overlay -->
+            <div id="instruction" class="absolute bottom-4 bg-slate-800/80 px-3 py-1.5 sm:px-4 sm:py-2 rounded-full text-[10px] sm:text-sm border border-slate-600 text-white animate-bounce pointer-events-none transition-opacity duration-500">
+                点击或拖动指挥侦察机飞行
+            </div>
+        </div>
+
+        <!-- Dashboard Area - Bottom on mobile -->
+        <div class="w-full flex flex-col gap-3 p-3 sm:p-4 z-10 overflow-y-auto" style="height: 58vh; min-height: 350px;">
+            
+            <!-- Real-time Metrics -->
+            <div id="statusPanel" class="glass-panel rounded-xl p-3 sm:p-5 border border-slate-700 transition-all duration-300">
+                <div class="flex flex-wrap justify-between items-end gap-2 mb-3 sm:mb-4">
+                    <h2 class="text-sm sm:text-lg font-semibold text-slate-200">气象侦察仪表盘</h2>
+                    <span id="zoneLabel" class="px-2 py-1 text-[10px] sm:text-xs font-bold rounded border zone-outer">外围环流区</span>
+                </div>
+                
+                <div class="grid grid-cols-2 gap-2 sm:gap-4">
+                    <!-- Wind Speed -->
+                    <div class="bg-slate-800/50 p-2 sm:p-4 rounded-lg border border-slate-700 flex flex-col items-center justify-center">
+                        <span class="text-slate-400 text-[10px] sm:text-sm mb-1">风速 (m/s)</span>
+                        <span id="windVal" class="text-2xl sm:text-4xl font-mono font-bold text-white">0.0</span>
+                    </div>
+                    
+                    <!-- Air Pressure -->
+                    <div class="bg-slate-800/50 p-2 sm:p-4 rounded-lg border border-slate-700 flex flex-col items-center justify-center">
+                        <span class="text-slate-400 text-[10px] sm:text-sm mb-1">中心气压 (hPa)</span>
+                        <span id="pressVal" class="text-2xl sm:text-4xl font-mono font-bold text-white">1010</span>
+                    </div>
+                </div>
+                
+                <div id="alertBox" class="mt-3 p-2 text-center text-[10px] sm:text-sm font-bold rounded hidden bg-red-900/50 text-red-300 border border-red-500">
+                    ⚠️ 警告：已进入眼墙！风速达到破坏性极值！
+                </div>
+                <div id="eyeBox" class="mt-3 p-2 text-center text-[10px] sm:text-sm font-bold rounded hidden bg-emerald-900/50 text-emerald-300 border border-emerald-500">
+                    🟢 提示：进入台风眼。风息云散，气压达到全局最低点。
+                </div>
+            </div>
+
+            <!-- Scientific Graphs -->
+            <div class="glass-panel rounded-xl p-3 sm:p-4 flex flex-col gap-3">
+                <h3 class="text-xs sm:text-sm font-semibold text-slate-300">径向剖面动态模型</h3>
+                
+                <div class="flex flex-col sm:flex-row gap-3">
+                    <div class="sm:flex-1 relative flex flex-col">
+                        <span class="text-[9px] sm:text-xs text-slate-400 mb-1">风速</span>
+                        <canvas id="windGraph" class="w-full" style="height: 80px;"></canvas>
+                    </div>
+                    <div class="sm:flex-1 relative flex flex-col">
+                        <span class="text-[9px] sm:text-xs text-slate-400 mb-1">气压</span>
+                        <canvas id="pressGraph" class="w-full" style="height: 80px;"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Formulas - Desktop only -->
+            <div class="glass-panel rounded-xl p-3 sm:p-4 border border-slate-700 text-[9px] sm:text-xs text-slate-300 hidden sm:block">
+                <p class="mb-2 font-semibold">物理约束公式：</p>
+                <div class="space-y-1 opacity-80">
+                    <p>1. 梯度风平衡: <span class="text-amber-300 font-mono">\( \frac{V^2}{r} + fV = \frac{1}{\rho}\frac{\partial P}{\partial r} \)</span></p>
+                    <p>2. 霍兰德剖面: <span class="text-amber-300 font-mono">\( P(r) = P_c + (P_n - P_c) e^{-(R_{mw}/r)^B} \)</span></p>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // --- Core Scientific Parameters & Models ---
+        const R_mw = 60;        // Radius of maximum winds (Eyewall)
+        const V_max = 65.0;     // Max wind speed (m/s)
+        const P_c = 910.0;      // Central pressure (hPa) - absolute minimum
+        const P_n = 1010.0;     // Environmental pressure (hPa)
+        const Holland_B = 1.5;  // Shape parameter for pressure profile
+        const Physical_Scale = 3.0; // Scale from canvas pixels to physical 'r'
+
+        // Holland Pressure Profile Model
+        // Strictly monotonic: continuously decreases as r approaches 0, hits minimum at r=0.
+        function getPressure(r) {
+            if (r <= 0.1) return P_c; 
+            return P_c + (P_n - P_c) * Math.exp(-Math.pow(R_mw / r, Holland_B));
+        }
+
+        // Modified Rankine Vortex Wind Model
+        // Non-linear cliff jump: sharp peak at R_mw, linear drop to 0 in eye, exponential decay outside.
+        function getWind(r) {
+            if (r === 0) return 0;
+            if (r <= R_mw) {
+                // Inside eye: Solid body rotation approximation
+                return V_max * (r / R_mw); 
+            } else {
+                // Outside eye: Potential flow decay
+                return V_max * Math.pow(R_mw / r, 0.5);
+            }
+        }
+
+        // --- Canvas & Simulation Setup ---
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        const windGraph = document.getElementById('windGraph');
+        const wCtx = windGraph.getContext('2d');
+        const pressGraph = document.getElementById('pressGraph');
+        const pCtx = pressGraph.getContext('2d');
+
+        // State variables
+        let width, height, cx, cy;
+        let planeR = 250; // Initial distance from center
+        let planeAngle = Math.PI / 4;
+        let planeX, planeY;
+        let isDragging = false;
+        let particles = [];
+        const NUM_PARTICLES = 1500;
+
+        // Resize handler
+        function resize() {
+            const dpr = window.devicePixelRatio || 1;
+            const rect = canvas.parentElement.getBoundingClientRect();
+            canvas.width = rect.width * dpr;
+            canvas.height = rect.height * dpr;
+            canvas.style.width = rect.width + 'px';
+            canvas.style.height = rect.height + 'px';
+            ctx.scale(dpr, dpr);
+            width = rect.width;
+            height = rect.height;
+            cx = width / 2;
+            cy = height / 2;
+            
+            // Sync graphs - 移动端高度改为80px以适应小屏幕
+            const isMobile = window.innerWidth < 640;
+            const graphHeight = isMobile ? 80 : 60;
+            
+            const wRect = windGraph.parentElement.getBoundingClientRect();
+            windGraph.width = wRect.width * dpr;
+            windGraph.height = graphHeight * dpr;
+            windGraph.style.height = graphHeight + 'px';
+            wCtx.scale(dpr, dpr);
+            
+            const pRect = pressGraph.parentElement.getBoundingClientRect();
+            pressGraph.width = pRect.width * dpr;
+            pressGraph.height = graphHeight * dpr;
+            pressGraph.style.height = graphHeight + 'px';
+            pCtx.scale(dpr, dpr);
+
+            initParticles();
+            updatePlanePosFromPolar();
+            drawGraphsStatic();
+        }
+
+        // --- Particle System (3D Flow Visualization) ---
+        class Particle {
+            constructor() {
+                this.reset(true);
+            }
+            
+            reset(randomRadius = false) {
+                this.angle = Math.random() * Math.PI * 2;
+                // Distribute particles mainly outside the eye.
+                // Simulating low-level inflow converging towards the eyewall.
+                const maxR = Math.max(width, height) / 2;
+                this.r = randomRadius ? R_mw + Math.random() * (maxR - R_mw) : maxR + Math.random() * 50;
+                this.size = Math.random() * 2.5 + 0.5;
+                this.baseAlpha = Math.random() * 0.4 + 0.1;
+            }
+
+            update() {
+                const wind = getWind(this.r);
+                
+                // Angular velocity: theta -= v/r (Counter-clockwise rotation constraint)
+                this.angle -= (wind / this.r) * 0.05; 
+                
+                // Radial velocity: Inward spiral (Convergence)
+                // Speeds up slightly as it gets closer to eyewall, but stops at eyewall.
+                let inwardSpeed = 0.3 + 1.5 * ((this.r - R_mw) / 200);
+                if (inwardSpeed < 0.2) inwardSpeed = 0.2;
+                
+                this.r -= inwardSpeed;
+
+                // Mechanism: Eyewall Updraft
+                // Particles reaching the eyewall violently rise up (disappear from 2D plane)
+                // and respawn at the outer edge. The eye remains absolutely clear.
+                if (this.r < R_mw) {
+                    this.reset();
+                }
+            }
+
+            draw(ctx) {
+                // Visual mapping: Denser/brighter near eyewall
+                let intensity = 1;
+                if (this.r < R_mw * 1.5) {
+                    intensity = 1 + (R_mw * 1.5 - this.r) / (R_mw * 0.5); 
+                }
+                
+                ctx.fillStyle = `rgba(255, 255, 255, ${this.baseAlpha * intensity})`;
+                ctx.beginPath();
+                const px = cx + this.r * Math.cos(this.angle);
+                const py = cy + this.r * Math.sin(this.angle);
+                ctx.arc(px, py, this.size, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function initParticles() {
+            particles = [];
+            for (let i = 0; i < NUM_PARTICLES; i++) {
+                particles.push(new Particle());
+            }
+        }
+
+        // --- Rendering Loop ---
+        function drawSimulation() {
+            // Clear with dark ocean/storm color
+            ctx.fillStyle = '#0a192f';
+            ctx.fillRect(0, 0, width, height);
+
+            // Draw eye static background (dark, clear)
+            const gradient = ctx.createRadialGradient(cx, cy, 0, cx, cy, R_mw * 3);
+            gradient.addColorStop(0, '#020617'); // Eye: darkest
+            gradient.addColorStop(R_mw / (R_mw * 3), '#1e293b'); // Eyewall inner edge
+            gradient.addColorStop((R_mw + 10) / (R_mw * 3), '#475569'); // Eyewall core clouds
+            gradient.addColorStop(1, '#0f172a'); // Outer fading
+            
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(cx, cy, R_mw * 3, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Update and draw particles (Storm structure)
+            for (let p of particles) {
+                p.update();
+                p.draw(ctx);
+            }
+
+            // Draw distance rings (Radar grid)
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+            ctx.setLineDash([5, 5]);
+            for (let r = 100; r < Math.max(width, height); r += 100) {
+                ctx.beginPath();
+                ctx.arc(cx, cy, r, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+            ctx.setLineDash([]);
+
+            // Draw Reconnaissance Aircraft (Green cursor)
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = '#4ade80';
+            ctx.fillStyle = '#4ade80';
+            ctx.strokeStyle = '#22c55e';
+            ctx.lineWidth = 2;
+
+            ctx.beginPath();
+            ctx.arc(planeX, planeY, 6, 0, Math.PI * 2);
+            ctx.fill();
+            
+            // Crosshair lines for aircraft
+            ctx.beginPath();
+            ctx.moveTo(planeX - 12, planeY); ctx.lineTo(planeX + 12, planeY);
+            ctx.moveTo(planeX, planeY - 12); ctx.lineTo(planeX, planeY + 12);
+            ctx.stroke();
+            
+            // Line connecting plane to center to emphasize radial distance
+            ctx.shadowBlur = 0;
+            ctx.strokeStyle = 'rgba(74, 222, 128, 0.4)';
+            ctx.beginPath();
+            ctx.moveTo(cx, cy);
+            ctx.lineTo(planeX, planeY);
+            ctx.stroke();
+
+            // Center Mark (The true lowest pressure point)
+            ctx.fillStyle = '#ef4444';
+            ctx.beginPath();
+            ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+            ctx.fill();
+
+            requestAnimationFrame(drawSimulation);
+        }
+
+        // --- Interaction & Logic ---
+        function updatePlanePosFromPolar() {
+            planeX = cx + planeR * Math.cos(planeAngle);
+            planeY = cy + planeR * Math.sin(planeAngle);
+        }
+
+        function handleInput(x, y) {
+            document.getElementById('instruction').style.opacity = '0';
+            
+            // Constrain within canvas
+            x = Math.max(0, Math.min(width, x));
+            y = Math.max(0, Math.min(height, y));
+            
+            const dx = x - cx;
+            const dy = y - cy;
+            planeR = Math.sqrt(dx * dx + dy * dy);
+            planeAngle = Math.atan2(dy, dx);
+            updatePlanePosFromPolar();
+            
+            updateDashboard();
+            updateGraphsDynamic();
+        }
+
+        // Mouse/Touch Events
+        canvas.addEventListener('mousedown', (e) => { isDragging = true; handleInput(e.offsetX, e.offsetY); });
+        canvas.addEventListener('mousemove', (e) => { if (isDragging) handleInput(e.offsetX, e.offsetY); });
+        window.addEventListener('mouseup', () => { isDragging = false; });
+
+        canvas.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            isDragging = true;
+            const rect = canvas.getBoundingClientRect();
+            handleInput(e.touches[0].clientX - rect.left, e.touches[0].clientY - rect.top);
+        }, {passive: false});
+        canvas.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            if (isDragging) {
+                const rect = canvas.getBoundingClientRect();
+                handleInput(e.touches[0].clientX - rect.left, e.touches[0].clientY - rect.top);
+            }
+        }, {passive: false});
+        window.addEventListener('touchend', () => { isDragging = false; });
+
+
+        // --- UI Update Logic ---
+        function updateDashboard() {
+            // Calculate physics based on geometric distance
+            const wind = getWind(planeR);
+            const press = getPressure(planeR);
+
+            // Update DOM numbers
+            document.getElementById('windVal').innerText = wind.toFixed(1);
+            document.getElementById('pressVal').innerText = press.toFixed(1);
+
+            // Zoning Logic (Constraints check)
+            const panel = document.getElementById('statusPanel');
+            const zoneLabel = document.getElementById('zoneLabel');
+            const alertBox = document.getElementById('alertBox');
+            const eyeBox = document.getElementById('eyeBox');
+
+            panel.className = "glass-panel rounded-xl p-5 border transition-all duration-300";
+            
+            // Eyewall logic: near R_mw (where wind is max)
+            const eyewallMargin = 15;
+            
+            if (planeR < R_mw - eyewallMargin) {
+                // IN THE EYE
+                zoneLabel.className = "px-2 py-1 text-xs font-bold rounded border zone-eye";
+                zoneLabel.innerText = "台风眼";
+                alertBox.classList.add('hidden');
+                eyeBox.classList.remove('hidden');
+            } 
+            else if (planeR >= R_mw - eyewallMargin && planeR <= R_mw + eyewallMargin) {
+                // IN THE EYEWALL
+                zoneLabel.className = "px-2 py-1 text-xs font-bold rounded border zone-eyewall";
+                zoneLabel.innerText = "眼墙 (危险区)";
+                panel.classList.add('alarm-active');
+                alertBox.classList.remove('hidden');
+                eyeBox.classList.add('hidden');
+            } 
+            else {
+                // OUTER BANDS
+                zoneLabel.className = "px-2 py-1 text-xs font-bold rounded border zone-outer";
+                zoneLabel.innerText = "外围环流区";
+                alertBox.classList.add('hidden');
+                eyeBox.classList.add('hidden');
+            }
+        }
+
+        // --- Dynamic Graphs ---
+        function drawGraphsStatic() {
+            // Draw static theoretical curves
+            const maxRDraw = 300;
+            // 移动端使用更大的边距
+            const isMobile = window.innerWidth < 640;
+            const margin = isMobile ? 20 : 10;
+            const graphH = isMobile ? 80 : 60;
+            
+            // 1. Wind Graph Setup
+            wCtx.clearRect(0, 0, windGraph.width, windGraph.height);
+            wCtx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+            wCtx.lineWidth = 2;
+            wCtx.beginPath();
+            
+            for (let r = 0; r <= maxRDraw; r += 2) {
+                const w = getWind(r);
+                const x = (r / maxRDraw) * (windGraph.width - margin);
+                const y = graphH - ((w / V_max) * (graphH * 0.8));
+                if (r === 0) wCtx.moveTo(x, y);
+                else wCtx.lineTo(x, y);
+            }
+            wCtx.stroke();
+
+            // 2. Pressure Graph Setup
+            pCtx.clearRect(0, 0, pressGraph.width, pressGraph.height);
+            pCtx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+            pCtx.lineWidth = 2;
+            pCtx.beginPath();
+            
+            for (let r = 0; r <= maxRDraw; r += 2) {
+                const p = getPressure(r);
+                const x = (r / maxRDraw) * (pressGraph.width - margin);
+                // Map P_c to bottom, P_n to top
+                const normP = (p - P_c) / (P_n - P_c);
+                const y = graphH - (normP * (graphH * 0.8));
+                if (r === 0) pCtx.moveTo(x, y);
+                else pCtx.lineTo(x, y);
+            }
+            pCtx.stroke();
+
+            // Draw axis labels roughly
+            wCtx.fillStyle = '#64748b'; wCtx.font = '9px sans-serif';
+            wCtx.fillText('r →', windGraph.width - margin, graphH - 2);
+            pCtx.fillStyle = '#64748b'; pCtx.font = '9px sans-serif';
+            pCtx.fillText('r →', pressGraph.width - margin, graphH - 2);
+        }
+
+        function updateGraphsDynamic() {
+            drawGraphsStatic(); // Redraw background
+            
+            const maxRDraw = 300;
+            const rClamp = Math.min(planeR, maxRDraw);
+            const isMobile = window.innerWidth < 640;
+            const margin = isMobile ? 20 : 10;
+            const graphH = isMobile ? 80 : 60;
+            const x = (rClamp / maxRDraw) * (windGraph.width - margin);
+
+            // Draw current position marker on Wind graph
+            const w = getWind(rClamp);
+            const wy = graphH - ((w / V_max) * (graphH * 0.8));
+            wCtx.fillStyle = '#4ade80';
+            wCtx.beginPath(); wCtx.arc(x, wy, 4, 0, Math.PI*2); wCtx.fill();
+            wCtx.strokeStyle = 'rgba(74, 222, 128, 0.5)'; wCtx.setLineDash([2,2]);
+            wCtx.beginPath(); wCtx.moveTo(x, graphH); wCtx.lineTo(x, wy); wCtx.stroke(); wCtx.setLineDash([]);
+
+            // Draw current position marker on Pressure graph
+            const p = getPressure(rClamp);
+            const normP = (p - P_c) / (P_n - P_c);
+            const py = graphH - (normP * (graphH * 0.8));
+            pCtx.fillStyle = '#4ade80';
+            pCtx.beginPath(); pCtx.arc(x, py, 4, 0, Math.PI*2); pCtx.fill();
+            pCtx.strokeStyle = 'rgba(74, 222, 128, 0.5)'; pCtx.setLineDash([2,2]);
+            pCtx.beginPath(); pCtx.moveTo(x, graphH); wCtx.lineTo(x, py); pCtx.stroke(); pCtx.setLineDash([]);
+        }
+
+        // --- Initialization ---
+        let resizeTimeout;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(resize, 100);
+        });
+        resize(); // Initial setup
+        updateDashboard(); // Initial UI
+        updateGraphsDynamic(); // Initial Graphs
+        drawSimulation(); // Start loop
+
+    </script>
+</body>
+</html>
