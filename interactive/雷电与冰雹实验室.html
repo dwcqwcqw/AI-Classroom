@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>雷电与冰雹生成模拟</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #1a202c; color: white; font-family: sans-serif; }
+        canvas { display: block; }
+        .control-panel {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(15, 23, 42, 0.95);
+            backdrop-filter: blur(10px);
+            padding: 12px;
+            border-radius: 16px 16px 0 0;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-bottom: none;
+            z-index: 100;
+        }
+        @media (min-width: 640px) {
+            .control-panel {
+                position: absolute;
+                bottom: 20px;
+                left: 50%;
+                transform: translateX(-50%);
+                width: 90%;
+                max-width: 800px;
+                padding: 20px;
+            }
+        }
+        .stats {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            background: rgba(0,0,0,0.5);
+            padding: 15px;
+            border-radius: 8px;
+            pointer-events: none;
+        }
+        .formula-card {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(0,0,0,0.5);
+            padding: 15px;
+            border-radius: 8px;
+            max-width: 300px;
+            font-size: 0.85rem;
+        }
+        input[type=range] { width: 100%; cursor: pointer; }
+    </style>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const katexOptions = {
+        delimiters: [
+            {left: '\\[', right: '\\]', display: true},
+            {left: '\\(', right: '\\)', display: false},
+            {left: '$$', right: '$$', display: true},
+            {left: '$', right: '$', display: false}
+        ],
+        throwOnError: false,
+        strict: false,
+        trust: true
+    };
+
+    let renderTimeout;
+    function safeRender() {
+        if (renderTimeout) clearTimeout(renderTimeout);
+        renderTimeout = setTimeout(() => {
+            renderMathInElement(document.body, katexOptions);
+        }, 100);
+    }
+
+    renderMathInElement(document.body, katexOptions);
+
+    const observer = new MutationObserver((mutations) => {
+        let shouldRender = false;
+        mutations.forEach((mutation) => {
+            if (mutation.target &&
+                mutation.target.className &&
+                typeof mutation.target.className === 'string' &&
+                mutation.target.className.includes('katex')) {
+                return;
+            }
+            shouldRender = true;
+        });
+
+        if (shouldRender) {
+            safeRender();
+        }
+    });
+
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: true
+    });
+
+    setInterval(() => {
+        const text = document.body.innerText;
+        if (text.includes('\\(') || text.includes('$$')) {
+            safeRender();
+        }
+    }, 2000);
+});
+</script>
+</head>
+<body class="relative min-h-screen overflow-hidden bg-slate-900">
+
+    <!-- Stats Panel - Top on mobile -->
+    <div class="absolute top-2 left-2 sm:top-4 sm:left-4 z-10 max-w-[160px] sm:max-w-none">
+        <div class="bg-black/60 backdrop-blur-sm rounded-lg p-2.5 sm:p-4 pointer-events-none">
+            <h1 class="text-base sm:text-xl font-bold mb-1 sm:mb-2">雷暴云物理模拟</h1>
+            <div class="space-y-0.5 sm:space-y-1 text-[10px] sm:text-sm">
+                <p>云底高度: <span id="cloud-bottom">1200</span> m</p>
+                <p>云顶高度: <span id="cloud-top">12000</span> m</p>
+                <p>冰雹直径: <span id="hail-size" class="text-yellow-400 font-mono">0</span> mm</p>
+                <p>电场强度: <span id="field-strength" class="text-blue-400 font-mono">0</span> kV/m</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Formula Card - Desktop sidebar, hidden on mobile -->
+    <div class="formula-card hidden sm:block">
+        <p class="font-bold border-b border-gray-600 mb-2">核心物理方程</p>
+        <div class="space-y-2">
+            <p>受力平衡: \(mg = \frac{1}{2} \rho v^2 C_d A\)</p>
+            <p>质量增长: \(\frac{dm}{dt} = E \cdot A \cdot v \cdot LWC\)</p>
+            <p>击穿阈值: \(E \ge E_{critical}\)</p>
+        </div>
+    </div>
+
+    <canvas id="simCanvas"></canvas>
+
+    <!-- Control Panel - Bottom on mobile -->
+    <div class="control-panel bottom-0 left-0 right-0 top-auto sm:top-auto sm:left-1/2 sm:transform sm:-translate-x-1/2">
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
+            <div>
+                <label class="block text-xs sm:text-sm font-medium mb-1 sm:mb-2">
+                    上升气流: <span id="updraft-val" class="text-blue-400">15</span> m/s
+                </label>
+                <input type="range" id="updraft-slider" min="5" max="50" step="1" value="15" class="h-6 sm:h-2">
+                <p class="text-[9px] sm:text-[10px] text-gray-400 mt-1 italic">※ 强上升气流是维持大冰雹悬浮增长的关键</p>
+            </div>
+            <div>
+                <label class="block text-xs sm:text-sm font-medium mb-1 sm:mb-2">
+                    温度梯度: <span id="temp-val" class="text-red-400">0.7</span> °C/100m
+                </label>
+                <input type="range" id="temp-slider" min="0.4" max="1.0" step="0.05" value="0.7" class="h-6 sm:h-2">
+                <p class="text-[9px] sm:text-[10px] text-gray-400 mt-1 italic">※ 影响过冷水含量与起电速率</p>
+            </div>
+        </div>
+        <div class="mt-3 sm:mt-4 flex flex-col sm:flex-row justify-between items-center gap-2 border-t border-gray-700 pt-3">
+            <div class="text-[10px] sm:text-xs text-gray-300 text-center sm:text-left">
+                操作：观察冰雹在 <span class="text-blue-300">0°C 至 -40°C</span> 过冷水区循环增长
+            </div>
+            <button onclick="resetSimulation()" class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 sm:px-4 rounded text-xs sm:text-sm transition w-full sm:w-auto">重置模拟</button>
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('simCanvas');
+        const ctx = canvas.getContext('2d');
+        const updraftSlider = document.getElementById('updraft-slider');
+        const tempSlider = document.getElementById('temp-slider');
+        
+        let width, height;
+        let particles = [];
+        let hailParticles = [];
+        let lightningPath = null;
+        let lightningTimer = 0;
+        let chargeDiff = 0; // Cumulative charge separation
+        let maxHailSizeEver = 0;
+
+        // Physical Constants
+        const RHO_ICE = 900; // kg/m^3
+        const CD = 0.45;     // Drag coefficient for sphere
+        const RHO_AIR = 1.2; // kg/m^3
+        const G = 9.8;
+
+        function resize() {
+            const dpr = window.devicePixelRatio || 1;
+            width = window.innerWidth;
+            height = window.innerHeight;
+            canvas.width = width * dpr;
+            canvas.height = height * dpr;
+            canvas.style.width = width + 'px';
+            canvas.style.height = height + 'px';
+            ctx.scale(dpr, dpr);
+        }
+
+        window.addEventListener('resize', resize);
+        resize();
+
+        class Particle {
+            constructor(type) {
+                this.reset(type);
+            }
+
+            reset(type) {
+                this.type = type; // 'ice' (positive), 'graupel' (negative), 'hail'
+                this.x = Math.random() * width;
+                this.y = height * (0.3 + Math.random() * 0.4);
+                this.radius = type === 'hail' ? 2 : 1 + Math.random() * 2;
+                this.mass = (4/3) * Math.PI * Math.pow(this.radius/1000, 3) * RHO_ICE;
+                this.charge = type === 'ice' ? 1 : -1;
+                this.vx = (Math.random() - 0.5) * 2;
+                this.vy = 0;
+                this.isFalling = false;
+            }
+
+            update(updraft, tempGrad) {
+                // Simplified terminal velocity calculation v = sqrt((8*r*g*rho_ice)/(3*rho_air*Cd))
+                const radiusMeters = this.radius / 1000;
+                const terminalVelocity = Math.sqrt((8 * radiusMeters * G * RHO_ICE) / (3 * RHO_AIR * CD));
+                
+                // Net velocity = Updraft - Terminal Velocity
+                const airSpeed = updraft * (1 - Math.abs(this.x - width/2)/(width/2)); // Stronger in center
+                const netVy = airSpeed - terminalVelocity;
+
+                this.y -= netVy * 0.1;
+                this.x += this.vx;
+
+                // Hail growth in supercooled zone (approx 1/3 to 2/3 of height)
+                const cloudTop = height * 0.1;
+                const cloudBottom = height * 0.8;
+                const zeroDegreeLine = height * 0.6;
+                const fortyDegreeLine = height * 0.2;
+
+                if (this.type === 'hail' && this.y < zeroDegreeLine && this.y > fortyDegreeLine) {
+                    // dm/dt = E * A * v * LWC
+                    // We simulate radius growth based on environment
+                    const growthRate = 0.005 * (updraft / 10) * tempGrad;
+                    this.radius += growthRate;
+                }
+
+                // Charge Separation Logic
+                if (this.type !== 'hail') {
+                    // Charge moves based on type
+                    chargeDiff += (this.type === 'ice' ? 1 : -1) * (updraft * 0.001);
+                }
+
+                // Boundaries
+                if (this.y > height) {
+                    if (this.type === 'hail') {
+                        if (this.radius > maxHailSizeEver) maxHailSizeEver = this.radius;
+                    }
+                    this.reset(this.type);
+                }
+                if (this.y < cloudTop) {
+                    this.y = cloudTop;
+                    this.vx *= -1;
+                }
+            }
+
+            draw() {
+                ctx.beginPath();
+                if (this.type === 'hail') {
+                    ctx.fillStyle = '#ffffff';
+                    ctx.shadowBlur = 5;
+                    ctx.shadowColor = '#fff';
+                } else {
+                    ctx.fillStyle = this.type === 'ice' ? '#93c5fd' : '#64748b';
+                    ctx.shadowBlur = 0;
+                }
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        function initParticles() {
+            particles = [];
+            for (let i = 0; i < 150; i++) {
+                particles.push(new Particle(Math.random() > 0.5 ? 'ice' : 'graupel'));
+            }
+            for (let i = 0; i < 15; i++) {
+                particles.push(new Particle('hail'));
+            }
+        }
+
+        function createLightning() {
+            const startX = Math.random() * width;
+            const startY = height * 0.2;
+            let curX = startX;
+            let curY = startY;
+            const segments = [];
+            
+            while (curY < height * 0.9) {
+                let nextX = curX + (Math.random() - 0.5) * 100;
+                let nextY = curY + Math.random() * 50 + 20;
+                segments.push({x1: curX, y1: curY, x2: nextX, y2: nextY});
+                curX = nextX;
+                curY = nextY;
+            }
+            lightningPath = segments;
+            lightningTimer = 15;
+            chargeDiff *= 0.1; // Discharge
+        }
+
+        function drawEnvironment() {
+            // Draw Cloud
+            const gradient = ctx.createLinearGradient(0, height*0.1, 0, height*0.8);
+            gradient.addColorStop(0, 'rgba(200, 200, 220, 0.8)');
+            gradient.addColorStop(0.5, 'rgba(100, 110, 140, 0.9)');
+            gradient.addColorStop(1, 'rgba(40, 45, 60, 0.7)');
+            
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.ellipse(width/2, height*0.45, width*0.4, height*0.35, 0, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Zero Degree Line
+            ctx.strokeStyle = 'rgba(0, 255, 255, 0.3)';
+            ctx.setLineDash([5, 5]);
+            ctx.beginPath();
+            ctx.moveTo(0, height * 0.6);
+            ctx.lineTo(width, height * 0.6);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.fillStyle = 'rgba(0, 255, 255, 0.5)';
+            ctx.font = '12px Arial';
+            ctx.fillText("0°C 融化层", 10, height * 0.6 - 5);
+            
+            ctx.fillText("-40°C 过冷水极限", 10, height * 0.2 - 5);
+        }
+
+        function drawLightning() {
+            if (!lightningPath || lightningTimer <= 0) return;
+            ctx.strokeStyle = `rgba(200, 220, 255, ${lightningTimer / 15})`;
+            ctx.lineWidth = 3;
+            ctx.shadowBlur = 15;
+            ctx.shadowColor = '#fff';
+            ctx.beginPath();
+            lightningPath.forEach(seg => {
+                ctx.moveTo(seg.x1, seg.y1);
+                ctx.lineTo(seg.x2, seg.y2);
+            });
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+            lightningTimer--;
+        }
+
+        function resetSimulation() {
+            initParticles();
+            chargeDiff = 0;
+            maxHailSizeEver = 0;
+        }
+
+        function animate() {
+            const updraft = parseFloat(updraftSlider.value);
+            const tempGrad = parseFloat(tempSlider.value);
+            
+            ctx.fillStyle = '#0f172a';
+            ctx.fillRect(0, 0, width, height);
+
+            drawEnvironment();
+
+            // Update stats
+            document.getElementById('updraft-val').innerText = updraft;
+            document.getElementById('temp-val').innerText = tempGrad;
+            
+            let currentMax = 0;
+            particles.forEach(p => {
+                p.update(updraft, tempGrad);
+                p.draw();
+                if (p.type === 'hail' && p.radius > currentMax) currentMax = p.radius;
+            });
+
+            document.getElementById('hail-size').innerText = (currentMax * 2).toFixed(1);
+            
+            const fieldStrength = Math.abs(chargeDiff * 5);
+            document.getElementById('field-strength').innerText = fieldStrength.toFixed(0);
+
+            // Lightning Trigger: Threshold approx 2000 kV/m in this scale
+            if (fieldStrength > 2000 && Math.random() > 0.95) {
+                createLightning();
+            }
+
+            drawLightning();
+
+            requestAnimationFrame(animate);
+        }
+
+        initParticles();
+        animate();
+    </script>
+</body>
+</html>

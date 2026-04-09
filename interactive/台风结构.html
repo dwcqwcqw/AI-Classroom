@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>台风结构数据探测器 - 气象学互动教学</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @keyframes rotate-slow {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .typhoon-vortex {
+            animation: rotate-slow 10s linear infinite;
+        }
+        .gradient-bg {
+            background: radial-gradient(circle at center, #1e293b 0%, #0f172a 100%);
+        }
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        #probe-cursor {
+            pointer-events: none;
+            transition: transform 0.1s ease-out;
+        }
+        .eye-region { fill: rgba(56, 189, 248, 0.2); }
+        .eyewall-region { fill: rgba(239, 68, 68, 0.2); }
+    </style>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const katexOptions = {
+        delimiters: [
+            {left: '\\[', right: '\\]', display: true},
+            {left: '\\(', right: '\\)', display: false},
+            {left: '$$', right: '$$', display: true},
+            {left: '$', right: '$', display: false}
+        ],
+        throwOnError: false,
+        strict: false,
+        trust: true
+    };
+
+    let renderTimeout;
+    function safeRender() {
+        if (renderTimeout) clearTimeout(renderTimeout);
+        renderTimeout = setTimeout(() => {
+            renderMathInElement(document.body, katexOptions);
+        }, 100);
+    }
+
+    renderMathInElement(document.body, katexOptions);
+
+    const observer = new MutationObserver((mutations) => {
+        let shouldRender = false;
+        mutations.forEach((mutation) => {
+            if (mutation.target &&
+                mutation.target.className &&
+                typeof mutation.target.className === 'string' &&
+                mutation.target.className.includes('katex')) {
+                return;
+            }
+            shouldRender = true;
+        });
+
+        if (shouldRender) {
+            safeRender();
+        }
+    });
+
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: true
+    });
+
+    setInterval(() => {
+        const text = document.body.innerText;
+        if (text.includes('\\(') || text.includes('$$')) {
+            safeRender();
+        }
+    }, 2000);
+});
+</script>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans overflow-hidden">
+
+    <!-- Header -->
+    <header class="p-3 sm:p-4 glass-panel z-10 flex justify-between items-center">
+        <div class="min-w-0 flex-1">
+            <h1 class="text-lg sm:text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-red-500 truncate">
+                台风结构数据探测器
+            </h1>
+            <p class="text-xs text-slate-400 hidden sm:block">气象学：交互式物理属性剖析</p>
+        </div>
+        <!-- Desktop Legend -->
+        <div class="hidden lg:flex gap-4 text-xs ml-4">
+            <div class="flex items-center gap-1">
+                <span class="w-3 h-3 bg-blue-500 rounded-full"></span> 台风眼 (Eye)
+            </div>
+            <div class="flex items-center gap-1">
+                <span class="w-3 h-3 bg-red-500 rounded-full"></span> 眼壁 (Eyewall)
+            </div>
+        </div>
+    </header>
+
+    <main class="flex-1 relative flex flex-col">
+        <!-- Visualization Area - 动画区域放在上面 -->
+        <div class="relative overflow-hidden cursor-crosshair" id="typhoon-container" style="height: 45vh; min-height: 280px;">
+            <!-- Background Grid -->
+            <div class="absolute inset-0 opacity-20" 
+                 style="background-image: radial-gradient(#475569 1px, transparent 1px); background-size: 40px 40px;">
+            </div>
+
+            <!-- Typhoon Top View -->
+            <div class="absolute inset-0 flex items-center justify-center p-4">
+                <svg id="typhoon-svg" viewBox="0 0 800 800" class="w-full h-full max-w-[400px] typhoon-vortex">
+                    <defs>
+                        <radialGradient id="eyeGradient">
+                            <stop offset="0%" stop-color="#0ea5e9" stop-opacity="0.4" />
+                            <stop offset="100%" stop-color="transparent" />
+                        </radialGradient>
+                    </defs>
+                    <!-- Spiral Arms -->
+                    <g id="spiral-arms" stroke="white" stroke-width="2" fill="none" opacity="0.3"></g>
+                    <!-- Eye -->
+                    <circle cx="400" cy="400" r="40" class="eye-region" />
+                    <!-- Eyewall -->
+                    <circle cx="400" cy="400" r="70" stroke="rgba(239,68,68,0.5)" stroke-width="30" fill="none" />
+                </svg>
+            </div>
+
+            <!-- Probe UI -->
+            <div id="probe-marker" class="absolute w-8 h-8 border-2 border-yellow-400 rounded-full -translate-x-1/2 -translate-y-1/2 pointer-events-none hidden shadow-[0_0_15px_rgba(250,204,21,0.5)]">
+                <div class="absolute inset-0 flex items-center justify-center">
+                    <div class="w-1 h-8 bg-yellow-400 absolute"></div>
+                    <div class="w-8 h-1 bg-yellow-400 absolute"></div>
+                </div>
+            </div>
+
+            <!-- Mobile Instruction -->
+            <div class="absolute bottom-2 left-2 text-xs text-slate-400 pointer-events-none">
+                <p>触摸/滑动探测</p>
+            </div>
+        </div>
+
+        <!-- Data Dashboard - 手机端底部面板 -->
+        <div class="lg:hidden w-full glass-panel p-4 flex flex-col gap-3 overflow-y-auto" style="height: 55vh; min-height: 300px;">
+            <!-- Quick Stats Row -->
+            <div class="flex gap-3">
+                <!-- Pressure Card -->
+                <div class="flex-1 bg-slate-900/50 rounded-lg p-3 border border-blue-500/30">
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="text-blue-400 text-xs">气压</span>
+                        <span id="mob-val-pressure" class="text-xl font-mono text-white">1010</span>
+                    </div>
+                    <div class="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                        <div id="mob-bar-pressure" class="h-full bg-blue-500 transition-all duration-100" style="width: 100%"></div>
+                    </div>
+                </div>
+                <!-- Wind Speed Card -->
+                <div class="flex-1 bg-slate-900/50 rounded-lg p-3 border border-red-500/30">
+                    <div class="flex justify-between items-center mb-1">
+                        <span class="text-red-400 text-xs">风速</span>
+                        <span id="mob-val-wind" class="text-xl font-mono text-white">0</span>
+                    </div>
+                    <div class="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                        <div id="mob-bar-wind" class="h-full bg-red-500 transition-all duration-100" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Legend -->
+            <div class="flex gap-4 text-xs justify-center">
+                <div class="flex items-center gap-1">
+                    <span class="w-3 h-3 bg-blue-500 rounded-full"></span> 眼 (Eye)
+                </div>
+                <div class="flex items-center gap-1">
+                    <span class="w-3 h-3 bg-red-500 rounded-full"></span> 壁 (Eyewall)
+                </div>
+            </div>
+
+            <!-- Analysis Section -->
+            <div>
+                <h2 class="text-xs font-semibold uppercase tracking-wider text-slate-500 mb-2">物理特性剖析</h2>
+                <div id="mob-location-description" class="text-sm leading-relaxed text-slate-300">
+                    请触摸台风区域获取分析...
+                </div>
+            </div>
+
+            <!-- Small Profile Chart -->
+            <div>
+                <h2 class="text-xs font-semibold text-slate-500 mb-2">径向剖面</h2>
+                <div class="h-24 w-full relative border-l border-b border-slate-700">
+                    <svg id="mob-profile-chart" class="w-full h-full">
+                        <path id="mob-pressure-curve" fill="none" stroke="#3b82f6" stroke-width="1.5" />
+                        <path id="mob-wind-curve" fill="none" stroke="#ef4444" stroke-width="1.5" />
+                        <line id="mob-probe-line" x1="0" y1="0" x2="0" y2="100%" stroke="white" stroke-dasharray="2" />
+                    </svg>
+                    <div class="flex justify-between text-[10px] mt-1 text-slate-500">
+                        <span>中心</span>
+                        <span>外围</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Data Dashboard - 桌面端侧边栏 -->
+        <div class="hidden lg:flex lg:w-80 lg:flex-col glass-panel p-6 flex-col gap-6 overflow-y-auto">
+            <section>
+                <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500 mb-4">实时探测数据</h2>
+                
+                <!-- Pressure Card -->
+                <div class="bg-slate-900/50 rounded-lg p-4 border border-blue-500/30 mb-3">
+                    <div class="flex justify-between items-end mb-1">
+                        <span class="text-blue-400 text-sm">中心气压 (P)</span>
+                        <span id="val-pressure" class="text-2xl font-mono text-white">1010</span>
+                    </div>
+                    <div class="text-right text-xs text-blue-300/60 font-mono italic">hPa</div>
+                    <div class="w-full bg-slate-800 h-1.5 mt-2 rounded-full overflow-hidden">
+                        <div id="bar-pressure" class="h-full bg-blue-500 transition-all duration-100" style="width: 100%"></div>
+                    </div>
+                </div>
+
+                <!-- Wind Speed Card -->
+                <div class="bg-slate-900/50 rounded-lg p-4 border border-red-500/30">
+                    <div class="flex justify-between items-end mb-1">
+                        <span class="text-red-400 text-sm">瞬时风速 (V)</span>
+                        <span id="val-wind" class="text-2xl font-mono text-white">0</span>
+                    </div>
+                    <div class="text-right text-xs text-red-300/60 font-mono italic">km/h</div>
+                    <div class="w-full bg-slate-800 h-1.5 mt-2 rounded-full overflow-hidden">
+                        <div id="bar-wind" class="h-full bg-red-500 transition-all duration-100" style="width: 0%"></div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Analysis Section -->
+            <section class="flex-1">
+                <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-500 mb-3">物理特性剖析</h2>
+                <div id="location-description" class="text-sm leading-relaxed text-slate-300">
+                    请将探测器移入气旋区域获取分析...
+                </div>
+            </section>
+
+            <!-- Small Profile Chart -->
+            <section>
+                <h2 class="text-xs font-semibold text-slate-500 mb-2">径向剖面示意图</h2>
+                <div class="h-32 w-full relative border-l border-b border-slate-700">
+                    <svg id="profile-chart" class="w-full h-full">
+                        <path id="pressure-curve" fill="none" stroke="#3b82f6" stroke-width="1.5" />
+                        <path id="wind-curve" fill="none" stroke="#ef4444" stroke-width="1.5" />
+                        <line id="probe-line" x1="0" y1="0" x2="0" y2="100%" stroke="white" stroke-dasharray="2" />
+                    </svg>
+                    <div class="flex justify-between text-[10px] mt-1 text-slate-500">
+                        <span>中心</span>
+                        <span>外围</span>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <script>
+        // Constants for Typhoon Physics (Holland Model Parameters)
+        const Pc = 940; // Central pressure (hPa)
+        const Pn = 1010; // Ambient pressure (hPa)
+        const Rmax = 55; // Radius of maximum winds (pixels on internal scale)
+        const B = 1.5;   // Holland shape parameter
+        const Rho = 1.15; // Air density kg/m3
+        const Vmax_abs = 220; // Max wind speed km/h
+
+        const container = document.getElementById('typhoon-container');
+        const probeMarker = document.getElementById('probe-marker');
+        const spiralArms = document.getElementById('spiral-arms');
+        
+        // Desktop elements
+        const valPressure = document.getElementById('val-pressure');
+        const valWind = document.getElementById('val-wind');
+        const barPressure = document.getElementById('bar-pressure');
+        const barWind = document.getElementById('bar-wind');
+        const locDesc = document.getElementById('location-description');
+        const probeLine = document.getElementById('probe-line');
+        
+        // Mobile elements (may not exist on desktop)
+        const mobValPressure = document.getElementById('mob-val-pressure');
+        const mobValWind = document.getElementById('mob-val-wind');
+        const mobBarPressure = document.getElementById('mob-bar-pressure');
+        const mobBarWind = document.getElementById('mob-bar-wind');
+        const mobLocDesc = document.getElementById('mob-location-description');
+        const mobProbeLine = document.getElementById('mob-probe-line');
+
+        // Generate Spiral Background
+        function createSpiral() {
+            let paths = "";
+            for (let i = 0; i < 8; i++) {
+                let angleOffset = (i / 8) * Math.PI * 2;
+                let path = "M 400 400 ";
+                for (let r = 10; r < 400; r += 5) {
+                    let theta = r / 40 + angleOffset;
+                    let x = 400 + r * Math.cos(theta);
+                    let y = 400 + r * Math.sin(theta);
+                    path += `L ${x} ${y} `;
+                }
+                paths += `<path d="${path}" />`;
+            }
+            spiralArms.innerHTML = paths;
+        }
+        createSpiral();
+
+        // Physics Calculations
+        function getAtmosphericData(radius) {
+            const r = Math.max(0.1, radius);
+            const pressure = Pc + (Pn - Pc) * Math.exp(-Math.pow(Rmax / r, B));
+            const term1 = (B * (Pn - Pc) * 100) / Rho;
+            const term2 = Math.pow(Rmax / r, B);
+            const term3 = Math.exp(-term2);
+            let windMS = Math.sqrt(Math.max(0, term1 * term2 * term3));
+            let windKMH = windMS * 3.6;
+            
+            if (r < Rmax * 0.6) {
+                windKMH *= (r / (Rmax * 0.6));
+            }
+
+            return { p: pressure.toFixed(1), v: windKMH.toFixed(1), r: r };
+        }
+
+        // Draw profile curves
+        function drawProfile() {
+            // Desktop chart
+            const pPath = document.getElementById('pressure-curve');
+            const vPath = document.getElementById('wind-curve');
+            let pPoints = "", vPoints = "";
+            const width = 320, height = 128;
+            for (let x = 0; x <= width; x++) {
+                const r = (x / width) * 300;
+                const data = getAtmosphericData(r);
+                const py = height - ((data.p - 940) / (1010 - 940)) * height;
+                const vy = height - (data.v / 220) * height;
+                pPoints += `${x === 0 ? 'M' : 'L'} ${x} ${py} `;
+                vPoints += `${x === 0 ? 'M' : 'L'} ${x} ${vy} `;
+            }
+            pPath.setAttribute('d', pPoints);
+            vPath.setAttribute('d', vPoints);
+            
+            // Mobile chart
+            const mobPPath = document.getElementById('mob-pressure-curve');
+            const mobVPath = document.getElementById('mob-wind-curve');
+            if (mobPPath && mobVPath) {
+                mobPPath.setAttribute('d', pPoints);
+                mobVPath.setAttribute('d', vPoints);
+            }
+        }
+        drawProfile();
+
+        // Update both desktop and mobile UI elements
+        function updateData(data, dist) {
+            const pPercent = ((data.p - 940) / (1010 - 940)) * 100;
+            const vPercent = (data.v / 220) * 100;
+            const chartX = (dist / 300) * 320;
+            
+            // Description logic
+            let desc = "";
+            if (dist < 35) {
+                desc = "<b class='text-blue-400'>台风眼 (Eye)：</b><br>气旋中心。下沉气流，气压最低（Pmin），云层稀薄，风力微弱。";
+            } else if (dist >= 35 && dist < 85) {
+                desc = "<b class='text-red-400'>眼壁 (Eyewall)：</b><br>最危险区域！气压梯度力与离心力平衡，风速达峰值。";
+            } else {
+                desc = "<b class='text-slate-400'>螺旋云带：</b><br>外围区域，气压回升，风速递减。";
+            }
+            
+            // Desktop update
+            if (valPressure) valPressure.innerText = data.p;
+            if (valWind) valWind.innerText = data.v;
+            if (barPressure) barPressure.style.width = `${pPercent}%`;
+            if (barWind) barWind.style.width = `${vPercent}%`;
+            if (locDesc) locDesc.innerHTML = desc;
+            if (probeLine) {
+                probeLine.setAttribute('x1', chartX);
+                probeLine.setAttribute('x2', chartX);
+            }
+            
+            // Mobile update
+            if (mobValPressure) mobValPressure.innerText = data.p;
+            if (mobValWind) mobValWind.innerText = data.v;
+            if (mobBarPressure) mobBarPressure.style.width = `${pPercent}%`;
+            if (mobBarWind) mobBarWind.style.width = `${vPercent}%`;
+            if (mobLocDesc) mobLocDesc.innerHTML = desc;
+            if (mobProbeLine) {
+                mobProbeLine.setAttribute('x1', chartX);
+                mobProbeLine.setAttribute('x2', chartX);
+            }
+        }
+
+        // Interaction Logic
+        function updateProbe(e) {
+            const rect = container.getBoundingClientRect();
+            let clientX, clientY;
+            
+            if (e.touches && e.touches.length > 0) {
+                clientX = e.touches[0].clientX;
+                clientY = e.touches[0].clientY;
+            } else {
+                clientX = e.clientX;
+                clientY = e.clientY;
+            }
+            
+            const x = clientX - rect.left;
+            const y = clientY - rect.top;
+            
+            const centerX = rect.width / 2;
+            const centerY = rect.height / 2;
+            const dist = Math.sqrt(Math.pow(x - centerX, 2) + Math.pow(y - centerY, 2));
+
+            probeMarker.style.left = `${x}px`;
+            probeMarker.style.top = `${y}px`;
+            probeMarker.classList.remove('hidden');
+            probeMarker.style.opacity = "1";
+
+            const data = getAtmosphericData(dist);
+            updateData(data, dist);
+        }
+
+        // Mouse events (desktop)
+        container.addEventListener('mousemove', updateProbe);
+        container.addEventListener('click', updateProbe);
+        container.addEventListener('mouseleave', () => {
+            probeMarker.style.opacity = "0.5";
+        });
+        container.addEventListener('mouseenter', () => {
+            probeMarker.style.opacity = "1";
+        });
+        
+        // Touch events (mobile)
+        container.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            updateProbe(e);
+        }, { passive: false });
+        
+        container.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            updateProbe(e);
+        }, { passive: false });
+
+        // Initialize
+        window.onload = () => {
+            const rect = container.getBoundingClientRect();
+            updateProbe({clientX: rect.left + rect.width/2 + 60, clientY: rect.top + rect.height/2});
+        };
+    </script>
+</body>
+</html>

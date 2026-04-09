@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>卫星轨道与成像原理模拟</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background-color: #0f172a; color: #f8fafc; font-family: system-ui, -apple-system, sans-serif; }
+        canvas { display: block; width: 100%; height: 100%; }
+        .panel-scroll { max-height: calc(100vh - 4rem); overflow-y: auto; }
+        .glass-panel { background: rgba(30, 41, 59, 0.85); backdrop-filter: blur(12px); border-left: 1px solid rgba(255,255,255,0.1); }
+        input[type=range] { accent-color: #3b82f6; }
+        
+        /* Custom scrollbar for panel */
+        .panel-scroll::-webkit-scrollbar { width: 6px; }
+        .panel-scroll::-webkit-scrollbar-track { background: transparent; }
+        .panel-scroll::-webkit-scrollbar-thumb { background: #475569; border-radius: 3px; }
+    </style>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const katexOptions = {
+        delimiters: [
+            {left: '\\[', right: '\\]', display: true},
+            {left: '\\(', right: '\\)', display: false},
+            {left: '$$', right: '$$', display: true},
+            {left: '$', right: '$', display: false}
+        ],
+        throwOnError: false,
+        strict: false,
+        trust: true
+    };
+
+    let renderTimeout;
+    function safeRender() {
+        if (renderTimeout) clearTimeout(renderTimeout);
+        renderTimeout = setTimeout(() => {
+            renderMathInElement(document.body, katexOptions);
+        }, 100);
+    }
+
+    renderMathInElement(document.body, katexOptions);
+
+    const observer = new MutationObserver((mutations) => {
+        let shouldRender = false;
+        mutations.forEach((mutation) => {
+            if (mutation.target &&
+                mutation.target.className &&
+                typeof mutation.target.className === 'string' &&
+                mutation.target.className.includes('katex')) {
+                return;
+            }
+            shouldRender = true;
+        });
+
+        if (shouldRender) {
+            safeRender();
+        }
+    });
+
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true,
+        characterData: true
+    });
+
+    setInterval(() => {
+        const text = document.body.innerText;
+        if (text.includes('\\(') || text.includes('$$')) {
+            safeRender();
+        }
+    }, 2000);
+});
+</script>
+</head>
+<body class="flex flex-col h-screen w-screen overflow-hidden">
+
+    <!-- Visualization Area - Top on mobile -->
+    <div class="relative flex-grow w-full" style="height: 40vh; min-height: 250px;">
+        <canvas id="simCanvas"></canvas>
+        
+        <!-- On-canvas Status -->
+        <div class="absolute top-2 left-2 sm:top-4 sm:left-4 pointer-events-none">
+            <div class="bg-black/50 backdrop-blur-sm rounded px-2 py-1.5 sm:px-3 sm:py-2 border border-white/10 text-[10px] sm:text-sm">
+                <div class="text-blue-300 font-bold mb-0.5 sm:mb-1">系统状态</div>
+                <div>地球时间: <span id="lblTime" class="font-mono">0.0</span> h</div>
+                <div>模式: <span id="lblMode" class="text-yellow-400">静止轨道</span></div>
+            </div>
+        </div>
+        
+        <!-- Mobile Quick Actions -->
+        <div class="absolute top-2 right-2 sm:top-4 sm:right-4 flex gap-1.5 sm:hidden">
+            <button id="btnPlayMobile" class="bg-emerald-600/80 hover:bg-emerald-500 px-2 py-1 rounded text-xs">播放</button>
+            <button id="btnClearMobile" class="bg-rose-600/80 hover:bg-rose-500 px-2 py-1 rounded text-xs">清除</button>
+        </div>
+    </div>
+
+    <!-- Control Panel - Bottom on mobile -->
+    <div class="glass-panel w-full flex flex-col shadow-2xl z-10 flex-shrink-0 overflow-y-auto" style="height: 58vh; min-height: 320px;">
+        <div class="p-3 sm:p-5 border-b border-white/10">
+            <h1 class="text-lg sm:text-xl font-bold text-white tracking-wide">卫星轨道与成像原理</h1>
+            <p class="text-[10px] sm:text-xs text-slate-400 mt-0.5 sm:mt-1">Earth Science Interactive</p>
+        </div>
+
+        <div class="p-3 sm:p-5 flex-1 flex flex-col gap-4 sm:gap-6">
+            
+            <!-- Mode Switcher -->
+            <div class="space-y-2 sm:space-y-3">
+                <h2 class="text-sm uppercase tracking-wider text-slate-400 font-semibold">模式切换</h2>
+                <div class="grid grid-cols-1 gap-2">
+                    <button id="btnGeo" class="mode-btn bg-blue-600 hover:bg-blue-500 text-white py-2 px-4 rounded transition text-left flex justify-between items-center ring-2 ring-blue-400 ring-offset-2 ring-offset-slate-900">
+                        <span>🛰️ 静止轨道 (GEO)</span>
+                    </button>
+                    <button id="btnPolar" class="mode-btn bg-slate-700 hover:bg-slate-600 text-white py-2 px-4 rounded transition text-left flex justify-between items-center">
+                        <span>🚀 单极轨卫星 (LEO)</span>
+                    </button>
+                    <button id="btnConstellation" class="mode-btn bg-slate-700 hover:bg-slate-600 text-white py-2 px-4 rounded transition text-left flex justify-between items-center">
+                        <span>🌐 极轨卫星组网</span>
+                    </button>
+                </div>
+            </div>
+
+            <div class="hidden sm:block space-y-2">
+                <h2 class="text-xs uppercase tracking-wider text-slate-400 font-semibold">模拟控制</h2>
+                
+                <div>
+                    <div class="flex justify-between text-sm mb-1">
+                        <label>时间流逝速度</label>
+                        <span id="speedVal">1x</span>
+                    </div>
+                    <input type="range" id="timeSpeed" min="0" max="10" step="0.1" value="1" class="w-full">
+                </div>
+
+                <div class="flex gap-2">
+                    <button id="btnPlay" class="flex-1 bg-emerald-600 hover:bg-emerald-500 py-2 rounded transition text-sm font-bold">暂停 / 播放</button>
+                    <button id="btnClear" class="flex-1 bg-rose-600 hover:bg-rose-500 py-2 rounded transition text-sm">清除扫描</button>
+                </div>
+            </div>
+
+            <!-- Scientific Info -->
+            <div class="space-y-2 bg-slate-800/50 p-3 sm:p-4 rounded-lg border border-slate-700 text-xs sm:text-sm">
+                <h2 class="uppercase tracking-wider text-blue-300 font-semibold mb-1" id="infoTitle">原理说明</h2>
+                
+                <div id="infoGeo" class="text-slate-300 space-y-1.5">
+                    <p><strong>机制：</strong>卫星运行于赤道上空约35786km处。其绕地运行的角速度与地球自转角速度严格一致，因此相对地面某点保持静止。</p>
+                    <p><strong>盲区约束：</strong>受制于地球曲率，静止轨道无法有效观测南北纬 70° 以上的极地区域。</p>
+                    <div class="bg-black/30 p-2 rounded text-center mt-2">
+                        \(T = 2\pi\sqrt{r^3/GM} = 24\text{h}\)
+                    </div>
+                </div>
+
+                <div id="infoPolar" class="text-slate-300 space-y-1.5 hidden">
+                    <p><strong>推扫机制：</strong>低轨卫星(约800km)穿越南北极，运行速度远超地球自转。地球在其下方不断自转，使得单次扫描形成的“推扫带”(Swath)在每次绕行后向西偏移。</p>
+                    <div class="bg-black/30 p-2 rounded text-center mt-2 text-xs">
+                        线速度：\(v = \sqrt{GM/r}\) <br>
+                        西移量：\(\Delta\lambda = \omega_e \times T_{polar}\)
+                    </div>
+                </div>
+
+                <div id="infoConst" class="text-slate-300 space-y-1.5 hidden">
+                    <p><strong>组网互补：</strong>单颗极轨卫星扫描全球存在重访延迟。在不同轨道面部署多颗卫星，可大幅缩短同一地点的观测间隔，实现无死角准实时观测。</p>
+                </div>
+            </div>
+
+                    <div class="text-[9px] sm:text-xs text-slate-500 italic mt-auto pt-2">
+                * 注：为便于观察，三维模型中卫星高度和地球比例已作视觉缩放处理，但运动周期、相对速度及覆盖几何关系严格遵循物理约束。
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 核心物理与仿真常数 ---
+        const CONSTANTS = {
+            earthRadius: 100,      // 视觉地球半径
+            geoRadius: 350,        // 视觉静止轨道半径 (远大于极轨)
+            polarRadius: 130,      // 视觉极轨半径 (贴近地球)
+            earthAngularVel: 0.002, // 地球自转基准角速度 (rad/tick)
+            polarAngularVel: 0.002 * 16, // 极轨角速度 (极轨周期约为地球自转1/16)
+            geoCoverageLat: 70,    // 静止卫星观测极限纬度
+            polarSwathDeg: 12      // 极轨卫星单侧刈幅角度 (半场角 mapped to degrees)
+        };
+
+        // --- 状态管理 ---
+        const state = {
+            mode: 'geo', // 'geo', 'polar', 'constellation'
+            time: 0,
+            isPlaying: true,
+            speed: 1.0,
+            earthRotationAngle: 0, // 累积自转角
+            coverageMap: new Map(), // 存储(lat,lon) -> 覆盖次数
+        };
+
+        // --- 3D & 数学工具 ---
+        const MathUtils = {
+            degToRad: (d) => d * Math.PI / 180,
+            radToDeg: (r) => r * 180 / Math.PI,
+            // 球坐标到直角坐标
+            sphereToCartesian: (r, lat, lon) => {
+                const rLat = MathUtils.degToRad(lat);
+                const rLon = MathUtils.degToRad(lon);
+                return {
+                    x: r * Math.cos(rLat) * Math.sin(rLon),
+                    y: r * Math.sin(rLat),
+                    z: r * Math.cos(rLat) * Math.cos(rLon)
+                };
+            },
+            // 大圆距离 (返回度数)
+            greatCircleDist: (lat1, lon1, lat2, lon2) => {
+                const rLat1 = MathUtils.degToRad(lat1);
+                const rLon1 = MathUtils.degToRad(lon1);
+                const rLat2 = MathUtils.degToRad(lat2);
+                const rLon2 = MathUtils.degToRad(lon2);
+                const dLon = rLon2 - rLon1;
+                const dLat = rLat2 - rLat1;
+                const a = Math.pow(Math.sin(dLat/2), 2) + Math.cos(rLat1) * Math.cos(rLat2) * Math.pow(Math.sin(dLon/2), 2);
+                const c = 2 * Math.asin(Math.min(1, Math.sqrt(a)));
+                return MathUtils.radToDeg(c);
+            },
+            // 绕Y轴旋转 (地球自转)
+            rotateY: (p, angle) => {
+                const cos = Math.cos(angle);
+                const sin = Math.sin(angle);
+                return {
+                    x: p.x * cos + p.z * sin,
+                    y: p.y,
+                    z: -p.x * sin + p.z * cos
+                };
+            },
+            // 绕X轴旋转
+            rotateX: (p, angle) => {
+                const cos = Math.cos(angle);
+                const sin = Math.sin(angle);
+                return {
+                    x: p.x,
+                    y: p.y * cos - p.z * sin,
+                    z: p.y * sin + p.z * cos
+                };
+            }
+        };
+
+        // --- 地球网格数据结构 ---
+        class EarthModel {
+            constructor() {
+                this.faces = [];
+                this.generateGrid();
+            }
+
+            generateGrid() {
+                const step = 6; // 经纬度网格步长
+                for (let lat = -90; lat < 90; lat += step) {
+                    for (let lon = 0; lon < 360; lon += step) {
+                        this.faces.push({
+                            centerLat: lat + step/2,
+                            centerLon: lon + step/2,
+                            verts: [
+                                {lat: lat, lon: lon},
+                                {lat: lat + step, lon: lon},
+                                {lat: lat + step, lon: lon + step},
+                                {lat: lat, lon: lon + step}
+                            ],
+                            key: `${lat}_${lon}`
+                        });
+                    }
+                }
+            }
+        }
+
+        // --- 渲染引擎 ---
+        class Renderer {
+            constructor(canvasId) {
+                this.canvas = document.getElementById(canvasId);
+                this.ctx = this.canvas.getContext('2d', { alpha: false });
+                this.earth = new EarthModel();
+                
+                this.focalLength = 800; // 透视参数
+                this.cameraZ = 600;
+
+                this.resize();
+                window.addEventListener('resize', () => this.resize());
+            }
+
+            resize() {
+                const dpr = window.devicePixelRatio || 1;
+                const rect = this.canvas.parentElement.getBoundingClientRect();
+                this.canvas.width = rect.width * dpr;
+                this.canvas.height = rect.height * dpr;
+                this.ctx.scale(dpr, dpr);
+                this.width = rect.width;
+                this.height = rect.height;
+            }
+
+            project(p) {
+                const scale = this.focalLength / (this.focalLength + this.cameraZ - p.z);
+                return {
+                    x: this.width / 2 + p.x * scale,
+                    y: this.height / 2 - p.y * scale,
+                    scale: scale,
+                    z: p.z
+                };
+            }
+
+            draw() {
+                // 背景
+                this.ctx.fillStyle = '#020617'; // slate-950
+                this.ctx.fillRect(0, 0, this.width, this.height);
+
+                const renderList = [];
+
+                // 1. 处理地球表面面片
+                this.earth.faces.forEach(face => {
+                    const projectedVerts = [];
+                    let centerZ = 0;
+
+                    for(let v of face.verts) {
+                        // 局部直角坐标 -> 乘以自转矩阵 -> 世界坐标
+                        let p = MathUtils.sphereToCartesian(CONSTANTS.earthRadius, v.lat, v.lon);
+                        p = MathUtils.rotateY(p, -state.earthRotationAngle); // 自西向东，相机看去Y轴旋转
+                        // 倾斜一点看
+                        p = MathUtils.rotateX(p, 0.2);
+                        
+                        const proj = this.project(p);
+                        projectedVerts.push(proj);
+                        centerZ += p.z;
+                    }
+                    centerZ /= 4;
+
+                    // 计算法线用于背面剔除
+                    const v1 = projectedVerts[0];
+                    const v2 = projectedVerts[1];
+                    const v3 = projectedVerts[2];
+                    const crossProduct = (v2.x - v1.x) * (v3.y - v2.y) - (v2.y - v1.y) * (v3.x - v2.x);
+
+                    if (crossProduct < 0) { // 面向相机
+                        renderList.push({
+                            type: 'face',
+                            z: centerZ,
+                            verts: projectedVerts,
+                            lat: face.centerLat,
+                            lon: face.centerLon,
+                            key: face.key
+                        });
+                    }
+                });
+
+                // 2. 计算卫星位置
+                const satellites = [];
+                
+                if (state.mode === 'geo') {
+                    // 静止轨道：随地球同步转动
+                    let satPos = MathUtils.sphereToCartesian(CONSTANTS.geoRadius, 0, 0); // 固定在赤道某点
+                    satPos = MathUtils.rotateY(satPos, -state.earthRotationAngle); // 同步转动
+                    satPos = MathUtils.rotateX(satPos, 0.2);
+                    
+                    // 强制覆盖逻辑 (GEO盲区限制)
+                    this.updateGeoCoverage();
+
+                    satellites.push({ pos: satPos, type: 'geo', color: '#fbbf24' }); // yellow-400
+                } 
+                else if (state.mode === 'polar' || state.mode === 'constellation') {
+                    const numSats = state.mode === 'polar' ? 1 : 3;
+                    for (let i = 0; i < numSats; i++) {
+                        // 极地轨道：空间固定，轨道面分布
+                        const phaseAngle = (i * Math.PI) / numSats; // 组网轨道面相位
+                        
+                        // 卫星在轨道面内的运动 (极轨穿过南北极，Y-Z平面或倾斜平面)
+                        // 参数方程：x=0, y=R*sin(wt), z=R*cos(wt)
+                        let p = {
+                            x: 0,
+                            y: CONSTANTS.polarRadius * Math.sin(state.time * CONSTANTS.polarAngularVel + phaseAngle),
+                            z: CONSTANTS.polarRadius * Math.cos(state.time * CONSTANTS.polarAngularVel + phaseAngle)
+                        };
+                        
+                        // 轨道面倾角，比如绕Y轴旋转分布RAAN
+                        if (state.mode === 'constellation') {
+                            p = MathUtils.rotateY(p, i * Math.PI * 2 / 3);
+                        }
+
+                        // 地面投影点 (经纬度，相对于自转的地球)
+                        // 需要把卫星世界坐标转回地球局部坐标计算星下点
+                        let pEarthFrame = MathUtils.rotateY(p, state.earthRotationAngle);
+                        const subLat = Math.asin(pEarthFrame.y / CONSTANTS.polarRadius) * 180 / Math.PI;
+                        const subLon = Math.atan2(pEarthFrame.x, pEarthFrame.z) * 180 / Math.PI;
+
+                        this.updatePolarCoverage(subLat, subLon);
+
+                        p = MathUtils.rotateX(p, 0.2); // 整体视角的微调
+                        satellites.push({ pos: p, type: 'polar', color: '#38bdf8', subLat, subLon }); // sky-400
+                    }
+                }
+
+                satellites.forEach(sat => {
+                    const proj = this.project(sat.pos);
+                    renderList.push({
+                        type: 'satellite',
+                        z: sat.pos.z,
+                        proj: proj,
+                        sat: sat
+                    });
+                });
+
+
+                // --- 执行渲染 ---
+                // 按Z深度排序 (画家算法)
+                renderList.sort((a, b) => b.z - a.z);
+
+                renderList.forEach(item => {
+                    if (item.type === 'face') {
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(item.verts[0].x, item.verts[0].y);
+                        for(let i=1; i<4; i++) this.ctx.lineTo(item.verts[i].x, item.verts[i].y);
+                        this.ctx.closePath();
+
+                        // 基础网格颜色
+                        this.ctx.strokeStyle = 'rgba(51, 65, 85, 0.4)'; // slate-700
+                        this.ctx.lineWidth = 0.5;
+
+                        // 突出赤道
+                        if (Math.abs(item.lat) < 5) this.ctx.strokeStyle = 'rgba(96, 165, 250, 0.5)';
+                        
+                        let fillStyle = 'rgba(15, 23, 42, 0.9)'; // 基础地球暗色
+
+                        // 覆盖叠加层
+                        const coverageCount = state.coverageMap.get(item.key) || 0;
+                        if (coverageCount > 0) {
+                            if (state.mode === 'geo') {
+                                fillStyle = 'rgba(250, 204, 21, 0.3)'; // GEO 黄色视场
+                            } else {
+                                // 极轨推扫带，颜色随次数加深
+                                const alpha = Math.min(0.8, 0.2 + coverageCount * 0.15);
+                                fillStyle = `rgba(56, 189, 248, ${alpha})`;
+                            }
+                        }
+
+                        this.ctx.fillStyle = fillStyle;
+                        this.ctx.fill();
+                        this.ctx.stroke();
+
+                    } else if (item.type === 'satellite') {
+                        // 画卫星到地心的连线(光束)
+                        const earthCenter = this.project({x:0, y:0, z:0});
+                        
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(item.proj.x, item.proj.y);
+                        this.ctx.lineTo(earthCenter.x, earthCenter.y);
+                        this.ctx.strokeStyle = item.sat.color + '40'; // 虚化连线
+                        this.ctx.lineWidth = 1;
+                        this.ctx.setLineDash([5, 5]);
+                        this.ctx.stroke();
+                        this.ctx.setLineDash([]);
+
+                        // 画卫星主体
+                        this.ctx.beginPath();
+                        const r = item.sat.type === 'geo' ? 6 : 4;
+                        this.ctx.arc(item.proj.x, item.proj.y, r * item.proj.scale, 0, Math.PI * 2);
+                        this.ctx.fillStyle = item.sat.color;
+                        this.ctx.fill();
+                        // 发光效果
+                        this.ctx.shadowBlur = 10;
+                        this.ctx.shadowColor = item.sat.color;
+                        this.ctx.fill();
+                        this.ctx.shadowBlur = 0;
+                    }
+                });
+
+                // 画轨道环线 (辅助视觉，固定在世界空间)
+                this.drawOrbits();
+            }
+
+            drawOrbits() {
+                this.ctx.strokeStyle = 'rgba(255,255,255,0.1)';
+                this.ctx.lineWidth = 1;
+                
+                if (state.mode === 'geo') {
+                    // 赤道面轨道环
+                    this.ctx.beginPath();
+                    for(let i=0; i<=360; i+=5) {
+                        let p = MathUtils.sphereToCartesian(CONSTANTS.geoRadius, 0, i);
+                        p = MathUtils.rotateX(p, 0.2);
+                        const proj = this.project(p);
+                        if (i===0) this.ctx.moveTo(proj.x, proj.y);
+                        else this.ctx.lineTo(proj.x, proj.y);
+                    }
+                    this.ctx.stroke();
+                } else {
+                    // 极面轨道环
+                    const numSats = state.mode === 'polar' ? 1 : 3;
+                    for (let i = 0; i < numSats; i++) {
+                        this.ctx.beginPath();
+                        for(let j=0; j<=360; j+=5) {
+                            let p = {
+                                x: 0,
+                                y: CONSTANTS.polarRadius * Math.sin(MathUtils.degToRad(j)),
+                                z: CONSTANTS.polarRadius * Math.cos(MathUtils.degToRad(j))
+                            };
+                            if (state.mode === 'constellation') p = MathUtils.rotateY(p, i * Math.PI * 2 / 3);
+                            p = MathUtils.rotateX(p, 0.2);
+                            const proj = this.project(p);
+                            if (j===0) this.ctx.moveTo(proj.x, proj.y);
+                            else this.ctx.lineTo(proj.x, proj.y);
+                        }
+                        this.ctx.stroke();
+                    }
+                }
+            }
+
+            updateGeoCoverage() {
+                // GEO观测半个地球，存在高纬度盲区
+                // 相对于地球坐标系，卫星经度固定为0
+                this.earth.faces.forEach(face => {
+                    // 判断距离和盲区
+                    const dist = MathUtils.greatCircleDist(face.centerLat, face.centerLon, 0, 0);
+                    // 可视范围且纬度小于70
+                    if (dist < 75 && Math.abs(face.centerLat) <= CONSTANTS.geoCoverageLat) {
+                        state.coverageMap.set(face.key, 1);
+                    } else {
+                        state.coverageMap.set(face.key, 0);
+                    }
+                });
+            }
+
+            updatePolarCoverage(subLat, subLon) {
+                // 推扫覆盖：距离星下点在刈幅范围内的网格被覆盖
+                this.earth.faces.forEach(face => {
+                    const dist = MathUtils.greatCircleDist(face.centerLat, face.centerLon, subLat, subLon);
+                    if (dist < CONSTANTS.polarSwathDeg) {
+                        const count = state.coverageMap.get(face.key) || 0;
+                        state.coverageMap.set(face.key, count + 1);
+                    }
+                });
+            }
+        }
+
+        // --- 主循环与UI控制 ---
+        const renderer = new Renderer('simCanvas');
+        
+        function loop() {
+            if (state.isPlaying) {
+                const dt = state.speed;
+                state.time += dt;
+                
+                // 地球自西向东自转
+                state.earthRotationAngle += CONSTANTS.earthAngularVel * dt;
+                
+                // 模拟时间显示 (地球转一圈为24h)
+                const hours = (state.earthRotationAngle / (Math.PI * 2)) * 24;
+                document.getElementById('lblTime').innerText = hours.toFixed(1);
+            }
+            renderer.draw();
+            requestAnimationFrame(loop);
+        }
+
+        function setMode(mode) {
+            state.mode = mode;
+            state.coverageMap.clear();
+            state.time = 0;
+            state.earthRotationAngle = 0;
+            
+            // UI 更新
+            document.querySelectorAll('.mode-btn').forEach(btn => {
+                btn.classList.remove('ring-2', 'ring-blue-400', 'ring-offset-2', 'ring-offset-slate-900', 'bg-blue-600');
+                btn.classList.add('bg-slate-700');
+            });
+            
+            const activeBtn = mode === 'geo' ? 'btnGeo' : (mode === 'polar' ? 'btnPolar' : 'btnConstellation');
+            const btn = document.getElementById(activeBtn);
+            btn.classList.remove('bg-slate-700');
+            btn.classList.add('bg-blue-600', 'ring-2', 'ring-blue-400', 'ring-offset-2', 'ring-offset-slate-900');
+
+            document.getElementById('lblMode').innerText = btn.innerText.replace(/[^\u4e00-\u9fa5A-Za-z()]/g, '').trim();
+
+            // 文本信息切换
+            document.getElementById('infoGeo').classList.add('hidden');
+            document.getElementById('infoPolar').classList.add('hidden');
+            document.getElementById('infoConst').classList.add('hidden');
+            
+            if(mode === 'geo') document.getElementById('infoGeo').classList.remove('hidden');
+            else if(mode === 'polar') document.getElementById('infoPolar').classList.remove('hidden');
+            else {
+                document.getElementById('infoPolar').classList.remove('hidden');
+                document.getElementById('infoConst').classList.remove('hidden');
+            }
+        }
+
+        // 事件监听
+        document.getElementById('btnGeo').onclick = () => setMode('geo');
+        document.getElementById('btnPolar').onclick = () => setMode('polar');
+        document.getElementById('btnConstellation').onclick = () => setMode('constellation');
+        
+        document.getElementById('btnPlay').onclick = () => {
+            state.isPlaying = !state.isPlaying;
+            document.getElementById('btnPlay').classList.toggle('bg-emerald-600');
+            document.getElementById('btnPlay').classList.toggle('bg-amber-600');
+        };
+
+        document.getElementById('btnClear').onclick = () => {
+            state.coverageMap.clear();
+        };
+        
+        // Mobile buttons
+        document.getElementById('btnPlayMobile')?.addEventListener('click', () => {
+            state.isPlaying = !state.isPlaying;
+            document.getElementById('btnPlayMobile').classList.toggle('bg-emerald-600/80');
+            document.getElementById('btnPlayMobile').classList.toggle('bg-amber-600/80');
+        });
+        
+        document.getElementById('btnClearMobile')?.addEventListener('click', () => {
+            state.coverageMap.clear();
+        });
+
+        const speedSlider = document.getElementById('timeSpeed');
+        speedSlider.oninput = (e) => {
+            state.speed = parseFloat(e.target.value);
+            document.getElementById('speedVal').innerText = state.speed.toFixed(1) + 'x';
+        };
+
+        // 启动
+        requestAnimationFrame(loop);
+
+    </script>
+</body>
+</html>

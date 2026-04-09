@@ -18,9 +18,13 @@ const inter = localFont({
 });
 
 export const metadata: Metadata = {
-  title: 'OpenMAIC',
+  title: {
+    default: 'Yunti',
+    template: '%s · Yunti',
+  },
   description:
-    'The open-source AI interactive classroom. Upload a PDF to instantly generate an immersive, multi-agent learning experience.',
+    'Yunti — AI-powered interactive learning. Upload a PDF to generate an immersive, multi-agent classroom experience.',
+  applicationName: 'Yunti',
 };
 
 export default function RootLayout({

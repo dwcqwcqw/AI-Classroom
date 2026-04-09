@@ -76,6 +76,8 @@ export const stageZhCN = {
     textInput: '文字输入',
     stopRecording: '停止录音',
     startRecording: '开始录音',
+    mobileInteractionDrawerTitle: '提问与同伴',
+    mobileInteractionFab: '打开提问与同伴面板',
   },
   pbl: {
     legacyFormat: '此PBL场景使用旧格式，请重新生成课程',
@@ -226,6 +228,8 @@ export const stageEnUS = {
     textInput: 'Text input',
     stopRecording: 'Stop recording',
     startRecording: 'Start recording',
+    mobileInteractionDrawerTitle: 'Ask & classmates',
+    mobileInteractionFab: 'Open ask and classmates panel',
   },
   pbl: {
     legacyFormat: 'This PBL scene uses a legacy format. Please regenerate the course.',
