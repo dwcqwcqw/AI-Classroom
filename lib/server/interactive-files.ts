@@ -81,13 +81,19 @@ export async function ensureInteractiveTables(db: ReturnType<typeof getD1>) {
       )`,
     )
     .run();
-  // Add file_key column if it doesn't exist (migration from old schema)
+  // Add file_key column if it doesn't exist (migration from old schema).
+  // SQLite's ADD COLUMN has no IF NOT EXISTS — swallow the two expected errors:
+  //   - "duplicate column name"   → column already exists
+  //   - "can not add column"      → already present (D1 restriction)
   try {
-    await db
-      .prepare(`ALTER TABLE ${INTERACTIVE_TABLE} ADD COLUMN file_key TEXT UNIQUE`)
-      .run();
-  } catch {
-    // column already exists
+    await db.prepare(`ALTER TABLE ${INTERACTIVE_TABLE} ADD COLUMN file_key TEXT`).run();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('duplicate column') || msg.includes('can not add')) {
+      log.info('[InteractiveFiles] file_key 列已存在，跳过 ALTER');
+    } else {
+      throw err; // re-throw unrelated errors (e.g. table doesn't exist)
+    }
   }
 }
 
@@ -150,26 +156,50 @@ export async function listInteractiveFiles(): Promise<InteractiveFileMeta[]> {
   if (!db) return [];
   await ensureInteractiveTables(db);
 
-  const { results } = await db
-    .prepare(
-      `SELECT id, file_key, title, title_en, description, description_en, object_key, size_bytes,
-              thumbnail_key, sort_order, created_at
-       FROM ${INTERACTIVE_TABLE}
-       ORDER BY sort_order ASC, created_at ASC`,
-    )
-    .all<{
-      id: string;
-      file_key: string | null;
-      title: string;
-      title_en: string;
-      description: string;
-      description_en: string;
-      object_key: string;
-      size_bytes: number;
-      thumbnail_key: string | null;
-      sort_order: number;
-      created_at: number;
-    }>();
+  let results: Array<{
+    id: string;
+    file_key: string | null;
+    title: string;
+    title_en: string;
+    description: string;
+    description_en: string;
+    object_key: string;
+    size_bytes: number;
+    thumbnail_key: string | null;
+    sort_order: number;
+    created_at: number;
+  }>;
+  try {
+    const q = await db
+      .prepare(
+        `SELECT id, file_key, title, title_en, description, description_en, object_key, size_bytes,
+                thumbnail_key, sort_order, created_at
+         FROM ${INTERACTIVE_TABLE}
+         ORDER BY sort_order ASC, created_at ASC`,
+      )
+      .all();
+    results = q.results as typeof results;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (msg.includes('no such column') && msg.includes('file_key')) {
+      log.warn('[InteractiveFiles] list: file_key 列不存在，降级');
+      const q = await db
+        .prepare(
+          `SELECT id, title, title_en, description, description_en, object_key, size_bytes,
+                  thumbnail_key, sort_order, created_at
+           FROM ${INTERACTIVE_TABLE}
+           ORDER BY sort_order ASC, created_at ASC`,
+        )
+        .all();
+      results = q.results as Array<{
+        id: string; file_key: null; title: string; title_en: string;
+        description: string; description_en: string; object_key: string;
+        size_bytes: number; thumbnail_key: string | null; sort_order: number; created_at: number;
+      }>;
+    } else {
+      throw err;
+    }
+  }
 
   return results.map((r) => ({
     id: r.id,
@@ -217,17 +247,34 @@ export async function getInteractiveFile(lookupKey: string): Promise<Interactive
 
   type Row = {
     id: string;
-    file_key: string | null;
+    file_key: string | null | undefined;
+    object_key: string;
     title: string;
     title_en: string;
     description: string;
     description_en: string;
-    object_key: string;
     size_bytes: number;
     thumbnail_key: string | null;
     sort_order: number;
     created_at: number;
   };
+
+/** Safe SELECT wrapper: catches "no such column: file_key" and falls back to no-file_key query */
+async function d1SafeFirst(
+  db: NonNullable<ReturnType<typeof getD1>>,
+  sqlWithFileKey: string,
+  sqlNoFileKey: string,
+  bindParams: unknown[],
+): Promise<Row | null> {
+  try {
+    return await db.prepare(sqlWithFileKey).bind(...bindParams).first<Row>() ?? null;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!msg.includes('no such column') || !msg.includes('file_key')) throw err;
+    log.warn('[InteractiveFiles] file_key 列不存在，降级查询');
+    return await db.prepare(sqlNoFileKey).bind(...bindParams).first<Row>() ?? null;
+  }
+}
 
   const diagnostic: InteractiveFileResult['_diagnostic'] = {
     lookupKey,
@@ -241,10 +288,16 @@ export async function getInteractiveFile(lookupKey: string): Promise<Interactive
   };
 
   // ── 路径 1：直接查 D1（id 或 file_key）─────────────────────────────────
-  let row: Row | null | undefined = await db
-    .prepare(`SELECT id, file_key, object_key FROM ${INTERACTIVE_TABLE} WHERE id = ? OR file_key = ? LIMIT 1`)
-    .bind(lookupKey, lookupKey)
-    .first<Row>();
+  let row: Row | null = await d1SafeFirst(
+    db,
+    `SELECT id, file_key, object_key, title, title_en, description, description_en,
+            size_bytes, thumbnail_key, sort_order, created_at
+     FROM ${INTERACTIVE_TABLE} WHERE id = ? OR file_key = ? LIMIT 1`,
+    `SELECT id, object_key, title, title_en, description, description_en,
+            size_bytes, thumbnail_key, sort_order, created_at
+     FROM ${INTERACTIVE_TABLE} WHERE id = ? LIMIT 1`,
+    [lookupKey, lookupKey],
+  );
 
   if (row) {
     diagnostic.dbFound = true;
@@ -256,13 +309,19 @@ export async function getInteractiveFile(lookupKey: string): Promise<Interactive
   const slugSort = CURATED_SLUG_SORT_ORDER[lookupKey];
   if (!row && slugSort !== undefined) {
     log.info(`[InteractiveFiles] slug 回退: sort_order=${slugSort} for "${lookupKey}"`);
-    row = await db
-      .prepare(`SELECT id, file_key, object_key FROM ${INTERACTIVE_TABLE} WHERE sort_order = ? ORDER BY created_at ASC LIMIT 1`)
-      .bind(slugSort)
-      .first<Row>();
+    row = await d1SafeFirst(
+      db,
+      `SELECT id, file_key, object_key, title, title_en, description, description_en,
+              size_bytes, thumbnail_key, sort_order, created_at
+       FROM ${INTERACTIVE_TABLE} WHERE sort_order = ? ORDER BY created_at ASC LIMIT 1`,
+      `SELECT id, object_key, title, title_en, description, description_en,
+              size_bytes, thumbnail_key, sort_order, created_at
+       FROM ${INTERACTIVE_TABLE} WHERE sort_order = ? ORDER BY created_at ASC LIMIT 1`,
+      [slugSort],
+    );
     if (row) {
       diagnostic.dbFound = true;
-      diagnostic.dbRow = { id: row.id, file_key: row.file_key, object_key: row.object_key };
+      diagnostic.dbRow = { id: row.id, file_key: null, object_key: row.object_key };
       log.info(`[InteractiveFiles] sort_order 回退命中: id="${row.id}" object_key="${row.object_key}"`);
     }
   }
