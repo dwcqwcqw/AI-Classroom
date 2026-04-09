@@ -155,6 +155,9 @@ export async function getInteractiveFile(id: string) {
   const object = await r2.get(row.object_key);
   if (!object) return null;
 
+  const body = object.body;
+  if (!body) return null;
+
   return {
     meta: {
       id: row.id,
@@ -168,6 +171,6 @@ export async function getInteractiveFile(id: string) {
       sortOrder: Number(row.sort_order),
       createdAt: Number(row.created_at),
     } as InteractiveFileMeta,
-    html: await object.arrayBuffer(),
+    html: await body.arrayBuffer(),
   };
 }
