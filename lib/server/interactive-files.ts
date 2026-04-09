@@ -128,6 +128,51 @@ export async function listInteractiveFiles(): Promise<InteractiveFileMeta[]> {
   }));
 }
 
+/**
+ * Reads bytes from an R2 object regardless of which R2 API shape is returned.
+ * Handles: object.arrayBuffer(), object.body.arrayBuffer(), object.body.getReader()
+ */
+async function readR2ObjectBytes(object: unknown): Promise<ArrayBuffer> {
+  const anyObject = object as {
+    arrayBuffer?: () => Promise<ArrayBuffer>;
+    body?: {
+      arrayBuffer?: () => Promise<ArrayBuffer>;
+      getReader?: () => ReadableStreamDefaultReader<Uint8Array>;
+    } | null;
+  };
+
+  if (typeof anyObject.arrayBuffer === 'function') {
+    return anyObject.arrayBuffer();
+  }
+
+  if (anyObject.body && typeof anyObject.body.arrayBuffer === 'function') {
+    return anyObject.body.arrayBuffer();
+  }
+
+  if (anyObject.body && typeof anyObject.body.getReader === 'function') {
+    const reader = anyObject.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        chunks.push(value);
+        total += value.byteLength;
+      }
+    }
+    const merged = new Uint8Array(total);
+    let offset = 0;
+    for (const chunk of chunks) {
+      merged.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    return merged.buffer;
+  }
+
+  throw new Error('R2 object body is not readable');
+}
+
 export async function getInteractiveFile(id: string) {
   const db = getD1();
   const r2 = getR2();
@@ -155,8 +200,12 @@ export async function getInteractiveFile(id: string) {
   const object = await r2.get(row.object_key);
   if (!object) return null;
 
-  const body = object.body;
-  if (!body) return null;
+  let html: ArrayBuffer;
+  try {
+    html = await readR2ObjectBytes(object);
+  } catch {
+    return null;
+  }
 
   return {
     meta: {
@@ -171,6 +220,6 @@ export async function getInteractiveFile(id: string) {
       sortOrder: Number(row.sort_order),
       createdAt: Number(row.created_at),
     } as InteractiveFileMeta,
-    html: await body.arrayBuffer(),
+    html,
   };
 }

@@ -1,4 +1,3 @@
-import { apiError, API_ERROR_CODES } from '@/lib/server/api-response';
 import { getInteractiveFile } from '@/lib/server/interactive-files';
 
 export async function GET(
@@ -11,7 +10,7 @@ export async function GET(
     const result = await getInteractiveFile(decodedId);
 
     if (!result) {
-      return apiError(API_ERROR_CODES.INVALID_REQUEST, 404, 'Interactive file not found');
+      return new Response('Interactive file not found', { status: 404 });
     }
 
     return new Response(result.html, {
@@ -22,11 +21,7 @@ export async function GET(
       },
     });
   } catch (error) {
-    return apiError(
-      API_ERROR_CODES.INTERNAL_ERROR,
-      500,
-      'Failed to load interactive file',
-      error instanceof Error ? error.message : String(error),
-    );
+    console.error('[interactive/files] Failed to load file:', error);
+    return new Response('Failed to load interactive file', { status: 500 });
   }
 }
