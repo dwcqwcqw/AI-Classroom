@@ -4,6 +4,8 @@
  * 迁移完成后通过 `wrangler delete` 删除。
  */
 
+import type { R2Bucket, D1Database } from '@cloudflare/workers-types';
+
 interface Env {
   FILES: R2Bucket;
   DB: D1Database;
