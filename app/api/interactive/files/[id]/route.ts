@@ -1,21 +1,32 @@
+import { apiError, API_ERROR_CODES } from '@/lib/server/api-response';
 import { getInteractiveFile } from '@/lib/server/interactive-files';
 
 export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> },
+  _: Request,
+  context: { params: Promise<{ id: string }> },
 ) {
-  const { id } = await params;
-  const decodedId = decodeURIComponent(id);
-  const file = await getInteractiveFile(decodedId);
+  try {
+    const { id } = await context.params;
+    const decodedId = decodeURIComponent(id);
+    const result = await getInteractiveFile(decodedId);
 
-  if (!file) {
-    return new Response('Not found', { status: 404 });
+    if (!result) {
+      return apiError(API_ERROR_CODES.INVALID_REQUEST, 404, 'Interactive file not found');
+    }
+
+    return new Response(result.html, {
+      status: 200,
+      headers: {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'public, max-age=3600',
+      },
+    });
+  } catch (error) {
+    return apiError(
+      API_ERROR_CODES.INTERNAL_ERROR,
+      500,
+      'Failed to load interactive file',
+      error instanceof Error ? error.message : String(error),
+    );
   }
-
-  return new Response(file.html, {
-    headers: {
-      'Content-Type': 'text/html; charset=utf-8',
-      'Cache-Control': 'public, max-age=3600',
-    },
-  });
 }
