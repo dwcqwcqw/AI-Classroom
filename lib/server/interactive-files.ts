@@ -108,13 +108,14 @@ export async function listInteractiveFiles(): Promise<InteractiveFileMeta[]> {
 
   const { results } = await db
     .prepare(
-      `SELECT id, title, title_en, description, description_en, object_key, size_bytes,
+      `SELECT id, file_key, title, title_en, description, description_en, object_key, size_bytes,
               thumbnail_key, sort_order, created_at
        FROM ${INTERACTIVE_TABLE}
        ORDER BY sort_order ASC, created_at ASC`,
     )
     .all<{
       id: string;
+      file_key: string | null;
       title: string;
       title_en: string;
       description: string;
