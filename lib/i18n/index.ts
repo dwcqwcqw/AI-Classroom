@@ -5,6 +5,7 @@ import { stageZhCN, stageEnUS } from './stage';
 import { chatZhCN, chatEnUS } from './chat';
 import { generationZhCN, generationEnUS } from './generation';
 import { settingsZhCN, settingsEnUS } from './settings';
+import { interactiveZhCN, interactiveEnUS } from './interactive';
 
 export const translations = {
   'zh-CN': {
@@ -13,6 +14,7 @@ export const translations = {
     ...chatZhCN,
     ...generationZhCN,
     ...settingsZhCN,
+    ...interactiveZhCN,
   },
   'en-US': {
     ...commonEnUS,
@@ -20,6 +22,7 @@ export const translations = {
     ...chatEnUS,
     ...generationEnUS,
     ...settingsEnUS,
+    ...interactiveEnUS,
   },
 } as const;
 

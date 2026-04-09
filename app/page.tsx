@@ -769,6 +769,105 @@ function HomePage() {
         </motion.div>
       )}
 
+      {/* ═══ Interactive Lab Section ═══ */}
+      <motion.div
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ delay: 0.5 }}
+        className="relative z-10 mt-10 w-full max-w-6xl space-y-5"
+      >
+        <div className="flex items-center gap-3">
+          <span className="text-2xl">🔬</span>
+          <div>
+            <h3 className="text-lg font-bold text-foreground/95">{t('interactive.title')}</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {t('interactive.description')}
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
+          {[
+            {
+              href: '/interactive',
+              emoji: '🌀',
+              label: '台风结构',
+              gradient: 'from-blue-500/20 to-red-600/20',
+            },
+            {
+              href: '/interactive',
+              emoji: '🌍',
+              label: '卫星轨道',
+              gradient: 'from-purple-500/20 to-blue-600/20',
+            },
+            {
+              href: '/interactive',
+              emoji: '⚡',
+              label: '雷电冰雹',
+              gradient: 'from-yellow-500/20 to-orange-600/20',
+            },
+            {
+              href: '/interactive',
+              emoji: '🌪️',
+              label: '风的偏转',
+              gradient: 'from-teal-500/20 to-green-600/20',
+            },
+            {
+              href: '/interactive',
+              emoji: '🔧',
+              label: '调配台风',
+              gradient: 'from-orange-500/20 to-red-600/20',
+            },
+            {
+              href: '/interactive',
+              emoji: '🌡️',
+              label: '气压风速',
+              gradient: 'from-cyan-500/20 to-blue-600/20',
+            },
+          ].map((item, i) => (
+            <motion.div
+              key={item.label}
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.5 + i * 0.06, duration: 0.35, ease: 'easeOut' }}
+            >
+              <Link
+                href={item.href}
+                className={cn(
+                  'group flex flex-col items-center justify-center gap-2',
+                  'rounded-2xl border border-border bg-gradient-to-br p-4',
+                  'hover:-translate-y-1 hover:shadow-lg hover:shadow-purple-500/10',
+                  'hover:border-purple-400/50 transition-all duration-300 cursor-pointer',
+                  item.gradient,
+                )}
+              >
+                <span className="text-3xl group-hover:scale-110 transition-transform duration-300">
+                  {item.emoji}
+                </span>
+                <span className="text-xs font-medium text-foreground/80 text-center leading-tight">
+                  {item.label}
+                </span>
+              </Link>
+            </motion.div>
+          ))}
+        </div>
+
+        <div className="flex justify-center">
+          <Link
+            href="/interactive"
+            className={cn(
+              'px-5 py-2 rounded-full border border-purple-400/40 dark:border-purple-500/30',
+              'text-sm font-medium text-purple-600 dark:text-purple-400',
+              'hover:bg-purple-50 dark:hover:bg-purple-950/30',
+              'hover:border-purple-500/60 transition-all duration-200',
+              'flex items-center gap-2',
+            )}
+          >
+            {t('interactive.enter')} →
+          </Link>
+        </div>
+      </motion.div>
+
       {/* ═══ Books sections ═══ */}
       <motion.div
         initial={{ opacity: 0 }}
