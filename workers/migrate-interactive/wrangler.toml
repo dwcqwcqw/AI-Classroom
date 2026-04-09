@@ -1,0 +1,16 @@
+name = "migrate-interactive"
+main = "src/index.ts"
+compatibility_date = "2026-03-26"
+compatibility_flags = ["nodejs_compat"]
+
+[[r2_buckets]]
+binding = "FILES"
+bucket_name = "ai-classroom-files"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "ai-classroom-db"
+database_id = "d1f70870-c5f6-4e0c-83a0-3dac874a282b"
+
+# Outbound HTTP for fetching HTML files from project directory
+# We pass the HTML content as environment variable or inline it

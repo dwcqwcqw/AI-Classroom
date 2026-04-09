@@ -16,6 +16,7 @@ import { ensureInteractiveTables, putInteractiveFile } from '../lib/server/inter
 const INTERACTIVE_FILES = [
   {
     filename: '卫星轨道成像.html',
+    fileKey: 'satellite' as const,
     title: '卫星轨道与成像原理模拟',
     titleEn: 'Satellite Orbit & Imaging Simulator',
     description: '探索卫星在地球周围的运动轨迹与成像原理，通过调整轨道参数观察卫星位置的实时变化。',
@@ -24,6 +25,7 @@ const INTERACTIVE_FILES = [
   },
   {
     filename: '台风结构.html',
+    fileKey: 'typhoon-structure' as const,
     title: '台风结构数据探测器',
     titleEn: 'Typhoon Structure Probe',
     description: '使用探测器探索台风内部的三维结构，观察台风眼、云墙、风眼墙等核心区域的物理参数。',
@@ -32,6 +34,7 @@ const INTERACTIVE_FILES = [
   },
   {
     filename: '气压与风速.html',
+    fileKey: 'pressure-wind' as const,
     title: '台风气象要素三维探测模拟',
     titleEn: '3D Typhoon Weather Elements Simulation',
     description: '在三维空间中实时探测气压、风速、温度等气象要素，直观理解台风不同区域的天气特征。',
@@ -40,6 +43,7 @@ const INTERACTIVE_FILES = [
   },
   {
     filename: '调配台风.html',
+    fileKey: 'typhoon-config' as const,
     title: '台风形成条件模拟器',
     titleEn: 'Typhoon Formation Simulator',
     description: '调整海温、大气稳定度、科里奥利力等关键条件，模拟台风从胚胎到成熟的完整形成过程。',
@@ -48,6 +52,7 @@ const INTERACTIVE_FILES = [
   },
   {
     filename: '雷电与冰雹实验室.html',
+    fileKey: 'lightning-hail' as const,
     title: '雷电与冰雹生成模拟',
     titleEn: 'Lightning & Hail Simulator',
     description: '模拟雷暴云中雷电和冰雹的形成过程，理解对流运动、水成物碰撞等微观物理机制。',
@@ -56,6 +61,7 @@ const INTERACTIVE_FILES = [
   },
   {
     filename: '风的偏转.html',
+    fileKey: 'coriolis' as const,
     title: '不同纬度的科里奥利力与气旋模拟',
     titleEn: 'Coriolis Force & Cyclone Simulation',
     description: '在地球不同纬度上观察风向受科里奥利力偏转的影响，直观理解气旋与反气旋的形成原理。',
@@ -94,6 +100,7 @@ async function migrate() {
 
     try {
       const result = await putInteractiveFile({
+        fileKey: entry.fileKey,
         title: entry.title,
         titleEn: entry.titleEn,
         description: entry.description,
