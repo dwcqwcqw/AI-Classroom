@@ -14,6 +14,7 @@ import {
   Sparkles,
   X,
   Trash2,
+  XCircle,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { cn } from '@/lib/utils';
@@ -47,6 +48,7 @@ export function SceneSidebar({
     useStageStore();
   const failedOutlines = useStageStore.use.failedOutlines();
   const stage = useStageStore((s) => s.stage);
+  const removeGeneratingOutline = useStageStore((s) => s.removeGeneratingOutline);
 
   const phaseLabelMap: Record<string, string> = {
     content: '内容',
@@ -65,6 +67,9 @@ export function SceneSidebar({
   // Track which scene is pending delete confirmation (first click arms, second click fires)
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const deleteTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Track which generating outline is pending delete confirmation
+  const [pendingDeleteOutlineId, setPendingDeleteOutlineId] = useState<string | null>(null);
+  const deleteOutlineTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const handleDeleteClick = (e: React.MouseEvent, sceneId: string) => {
     e.stopPropagation();
@@ -88,6 +93,19 @@ export function SceneSidebar({
       await onRetryOutline(outlineId);
     } finally {
       setRetryingOutlineId(null);
+    }
+  };
+
+  const handleDeleteGeneratingOutline = (e: React.MouseEvent, outlineId: string) => {
+    e.stopPropagation();
+    if (pendingDeleteOutlineId === outlineId) {
+      if (deleteOutlineTimerRef.current) clearTimeout(deleteOutlineTimerRef.current);
+      setPendingDeleteOutlineId(null);
+      removeGeneratingOutline(outlineId);
+    } else {
+      if (deleteOutlineTimerRef.current) clearTimeout(deleteOutlineTimerRef.current);
+      setPendingDeleteOutlineId(outlineId);
+      deleteOutlineTimerRef.current = setTimeout(() => setPendingDeleteOutlineId(null), 2000);
     }
   };
 
@@ -441,6 +459,25 @@ export function SceneSidebar({
                       >
                         {outline.title}
                       </span>
+                    </div>
+                    {/* Delete button — visible on hover */}
+                    <div className="flex items-center gap-0.5 shrink-0 ml-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={(e) => handleDeleteGeneratingOutline(e, outline.id)}
+                        className={cn(
+                          'size-5 rounded-full flex items-center justify-center transition-colors',
+                          pendingDeleteOutlineId === outline.id
+                            ? 'bg-red-500 text-white animate-pulse'
+                            : 'text-gray-400 dark:text-gray-500 hover:bg-red-100 dark:hover:bg-red-900/40 hover:text-red-500',
+                        )}
+                        title={pendingDeleteOutlineId === outline.id ? '再次点击确认删除' : '删除此页面'}
+                      >
+                        {pendingDeleteOutlineId === outline.id ? (
+                          <XCircle className="size-3" />
+                        ) : (
+                          <Trash2 className="size-3" />
+                        )}
+                      </button>
                     </div>
                   </div>
 

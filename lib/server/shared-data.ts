@@ -147,16 +147,22 @@ export async function writeSharedSetting<T>(key: string, value: T): Promise<void
 
 export async function toggleStageStar(stageId: string): Promise<boolean> {
   const db = getD1();
-  if (!db) return false;
+  if (!db) {
+    log.warn('D1 database not available, cannot toggle star');
+    return false;
+  }
   await ensureSharedTables(db);
 
-  // 先获取当前状态
+  // Check if the stage exists first
   const row = await db
     .prepare('SELECT is_starred FROM shared_stages WHERE id = ?')
     .bind(stageId)
     .first<{ is_starred: number }>();
 
-  if (!row) return false;
+  if (!row) {
+    log.warn(`Stage not found for toggleStar: ${stageId}`);
+    return false;
+  }
 
   const newStarred = row.is_starred ? 0 : 1;
 

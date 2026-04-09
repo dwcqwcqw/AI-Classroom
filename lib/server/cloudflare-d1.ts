@@ -68,10 +68,14 @@ export async function ensureSharedTables(db: D1DatabaseLike) {
     )
     .run();
 
-  // 迁移：为已有数据添加 is_starred 列（如果还没有）
+  // Migration: Add is_starred column if it doesn't exist (for existing tables)
   try {
-    await db.prepare('ALTER TABLE shared_stages ADD COLUMN is_starred INTEGER NOT NULL DEFAULT 0').run();
+    await db.prepare('SELECT is_starred FROM shared_stages LIMIT 1').first();
   } catch {
-    // 列已存在，忽略
+    try {
+      await db.prepare('ALTER TABLE shared_stages ADD COLUMN is_starred INTEGER NOT NULL DEFAULT 0').run();
+    } catch {
+      // Column already exists, ignore
+    }
   }
 }

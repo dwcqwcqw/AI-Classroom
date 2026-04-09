@@ -126,6 +126,10 @@ interface StageState {
   generationStatus: 'idle' | 'generating' | 'paused' | 'completed' | 'error';
   currentGeneratingOrder: number;
   failedOutlines: FailedOutlineInfo[];
+
+  // Per-outline generation timeout tracking
+  outlineGenerationStartTime: number | null; // timestamp when current outline started generating
+  outlineGenerationTimeoutMs: number; // timeout in ms (default 10 minutes)
   refineSessions: RefineSessionMap;
 
   // Actions
@@ -139,6 +143,7 @@ interface StageState {
   setMode: (mode: StageMode) => void;
   setToolbarState: (state: ToolbarState) => void;
   setGeneratingOutlines: (outlines: SceneOutline[]) => void;
+  removeGeneratingOutline: (outlineId: string) => void;
   setOutlines: (outlines: SceneOutline[]) => void;
   setGenerationStatus: (status: 'idle' | 'generating' | 'paused' | 'completed' | 'error') => void;
   setCurrentGeneratingOrder: (order: number) => void;
@@ -146,6 +151,9 @@ interface StageState {
   addFailedOutline: (outline: SceneOutline, phase?: FailedPhase, reason?: string) => void;
   clearFailedOutlines: () => void;
   retryFailedOutline: (outlineId: string) => void;
+  // Timeout tracking
+  setOutlineGenerationStartTime: (time: number | null) => void;
+  setOutlineGenerationTimeout: (ms: number) => void;
   ensureRefineSession: (scene: Scene) => void;
   setRefineDraft: (sceneId: string, draftInput: string) => void;
   appendRefineMessage: (sceneId: string, message: SceneRefineMessage) => void;
@@ -188,6 +196,8 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
   generationStatus: 'idle' as const,
   currentGeneratingOrder: -1,
   failedOutlines: [],
+  outlineGenerationStartTime: null,
+  outlineGenerationTimeoutMs: 10 * 60 * 1000, // 10 minutes default
   refineSessions: {},
 
   // Actions
@@ -279,6 +289,13 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
 
   setGeneratingOutlines: (generatingOutlines) => set({ generatingOutlines }),
 
+  removeGeneratingOutline: (outlineId: string) => {
+    const current = get().generatingOutlines;
+    if (!current.some((o) => o.id === outlineId)) return;
+    set({ generatingOutlines: current.filter((o) => o.id !== outlineId) });
+    debouncedSave();
+  },
+
   setOutlines: (outlines) => {
     set({ outlines });
     // Persist outlines to IndexedDB
@@ -338,6 +355,10 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
       failedOutlines: get().failedOutlines.filter((o) => o.outline.id !== outlineId),
     });
   },
+
+  setOutlineGenerationStartTime: (time) => set({ outlineGenerationStartTime: time }),
+
+  setOutlineGenerationTimeout: (ms) => set({ outlineGenerationTimeoutMs: ms }),
 
   ensureRefineSession: (scene) => {
     set((state) => {
@@ -590,6 +611,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
       currentGeneratingOrder: -1,
       failedOutlines: [],
       generatingOutlines: [],
+      outlineGenerationStartTime: null,
     }));
     log.info('Store cleared');
   },

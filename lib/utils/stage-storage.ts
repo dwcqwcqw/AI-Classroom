@@ -146,7 +146,15 @@ export async function listStages(): Promise<StageListItem[]> {
 
     const json = (await res.json()) as { success: boolean; stages?: StageListItem[] };
     const stages = json.stages ?? [];
-    return stages;
+
+    // Load bookmarks from local cache for immediate display
+    const localBookmarks = loadBookmarksFromLocal();
+
+    // Merge server data with local bookmark cache
+    return stages.map(stage => ({
+      ...stage,
+      isBookmarked: localBookmarks[stage.id] ?? stage.isBookmarked ?? false,
+    }));
   } catch (error) {
     log.error('Failed to list shared stages:', error);
     return [];
@@ -254,7 +262,38 @@ export async function stageExists(stageId: string): Promise<boolean> {
 
 // ─── Bookmark (star) ───────────────────────────────────────────────────────────
 
+const BOOKMARK_STORAGE_KEY = 'maic:bookmarks';
+
+function getBookmarksFromLocal(): Record<string, boolean> {
+  if (typeof window === 'undefined') return {};
+  try {
+    const raw = window.localStorage.getItem(BOOKMARK_STORAGE_KEY);
+    if (!raw) return {};
+    return JSON.parse(raw) as Record<string, boolean>;
+  } catch {
+    return {};
+  }
+}
+
+function saveBookmarksToLocal(bookmarks: Record<string, boolean>) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(BOOKMARK_STORAGE_KEY, JSON.stringify(bookmarks));
+  } catch {
+    // ignore
+  }
+}
+
 export async function toggleBookmark(stageId: string): Promise<boolean> {
+  // First, get current state from local cache (for immediate UI update)
+  const localBookmarks = getBookmarksFromLocal();
+  const wasStarred = localBookmarks[stageId] ?? false;
+  const nowStarred = !wasStarred;
+
+  // Update local cache immediately for persistence
+  const newLocalBookmarks = { ...localBookmarks, [stageId]: nowStarred };
+  saveBookmarksToLocal(newLocalBookmarks);
+
   try {
     const res = await fetch(`/api/shared/stages/${encodeURIComponent(stageId)}`, {
       method: 'PATCH',
@@ -264,10 +303,55 @@ export async function toggleBookmark(stageId: string): Promise<boolean> {
 
     if (!res.ok) return false;
     const json = (await res.json()) as { success: boolean; isStarred?: boolean };
-    return json.isStarred ?? false;
+    const serverStarred = json.isStarred ?? nowStarred;
+
+    // Sync local cache with server state
+    if (serverStarred !== nowStarred) {
+      const syncedBookmarks = { ...getBookmarksFromLocal(), [stageId]: serverStarred };
+      saveBookmarksToLocal(syncedBookmarks);
+    }
+
+    return serverStarred;
   } catch (error) {
     log.error('Failed to toggle bookmark:', error);
-    return false;
+    // Return the optimistic state (local cache already updated)
+    return nowStarred;
+  }
+}
+
+/**
+ * Load bookmark state from local cache (for initial page load).
+ * This ensures bookmarks are available immediately without waiting for API.
+ */
+export function loadBookmarksFromLocal(): Record<string, boolean> {
+  return getBookmarksFromLocal();
+}
+
+/**
+ * Sync bookmarks from server to local cache (call on app initialization).
+ */
+export async function syncBookmarksFromServer(): Promise<Record<string, boolean>> {
+  try {
+    const res = await fetch('/api/shared/stages');
+    if (!res.ok) return getBookmarksFromLocal();
+
+    const json = (await res.json()) as { success: boolean; stages?: Array<{ id: string; isBookmarked?: boolean }> };
+    const stages = json.stages ?? [];
+
+    const serverBookmarks: Record<string, boolean> = {};
+    for (const stage of stages) {
+      serverBookmarks[stage.id] = stage.isBookmarked ?? false;
+    }
+
+    // Merge with local bookmarks (server takes precedence for synced data)
+    const localBookmarks = getBookmarksFromLocal();
+    const merged = { ...localBookmarks, ...serverBookmarks };
+    saveBookmarksToLocal(merged);
+
+    return merged;
+  } catch (error) {
+    log.warn('Failed to sync bookmarks from server:', error);
+    return getBookmarksFromLocal();
   }
 }
 

@@ -48,8 +48,8 @@ export function Header({ currentSceneTitle }: HeaderProps) {
     mediaTasksForStage.length === 0 ||
     mediaTasksForStage.every((task) => task.status === 'done' || task.status === 'failed');
 
-  const canExport =
-    slideSceneCount > 0 && generatingOutlines.length === 0 && mediaSettledForStage;
+  // Allow download if there are already generated slides, regardless of generatingOutlines
+  const canExport = slideSceneCount > 0 && mediaSettledForStage;
 
   const languageRef = useRef<HTMLDivElement>(null);
   const themeRef = useRef<HTMLDivElement>(null);

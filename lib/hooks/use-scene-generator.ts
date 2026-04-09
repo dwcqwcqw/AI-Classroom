@@ -411,6 +411,7 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
   const fetchAbortRef = useRef<AbortController | null>(null);
   const lastParamsRef = useRef<GenerationParams | null>(null);
   const generateRemainingRef = useRef<((params: GenerationParams) => Promise<void>) | null>(null);
+  const outlineTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const store = useStageStore;
 
@@ -487,6 +488,11 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
             break;
           }
 
+          // Start outline generation timeout tracking
+          const outlineStartTime = Date.now();
+          store.getState().setOutlineGenerationStartTime(outlineStartTime);
+          setOutlineTimeout(outline, outlineStartTime);
+
           store.getState().setCurrentGeneratingOrder(outline.order);
 
           // Step 1: Generate content
@@ -516,6 +522,9 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
             store.getState().addFailedOutline(outline, 'content', errMsg);
             options.onSceneFailed?.(outline, errMsg);
             removeGeneratingOutline(outline.id);
+            // Clear timeout since outline is no longer generating
+            clearOutlineTimeout();
+            store.getState().setOutlineGenerationStartTime(null);
             // Skip this scene and continue with the next one
             continue;
           }
@@ -547,6 +556,9 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
             store.getState().addFailedOutline(outline, 'actions', errMsg);
             options.onSceneFailed?.(outline, errMsg);
             removeGeneratingOutline(outline.id);
+            // Clear timeout since outline is no longer generating
+            clearOutlineTimeout();
+            store.getState().setOutlineGenerationStartTime(null);
             // Skip this scene and continue with the next one
             continue;
           }
@@ -576,6 +588,9 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
 
           removeGeneratingOutline(outline.id);
           store.getState().addScene(scene);
+          // Clear timeout since outline generation completed
+          clearOutlineTimeout();
+          store.getState().setOutlineGenerationStartTime(null);
           options.onSceneGenerated?.(scene, outline.order);
           previousSpeeches = actionsResult.previousSpeeches || [];
         }
@@ -606,12 +621,47 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
   // Keep ref in sync so retrySingleOutline can call it
   generateRemainingRef.current = generateRemaining;
 
+  // Helper to clear outline timeout
+  const clearOutlineTimeout = useCallback(() => {
+    if (outlineTimeoutRef.current) {
+      clearTimeout(outlineTimeoutRef.current);
+      outlineTimeoutRef.current = null;
+    }
+  }, []);
+
+  // Helper to set outline timeout - marks outline as timed out and stops it
+  const setOutlineTimeout = useCallback(
+    (outline: SceneOutline, startTime: number) => {
+      clearOutlineTimeout();
+      const timeoutMs = store.getState().outlineGenerationTimeoutMs;
+      const elapsed = Date.now() - startTime;
+      const remaining = Math.max(0, timeoutMs - elapsed);
+
+      outlineTimeoutRef.current = setTimeout(() => {
+        // Only trigger timeout if we're still on the same outline
+        const currentOutline = store.getState().generatingOutlines[0];
+        if (currentOutline?.id === outline.id) {
+          log.warn(`Outline "${outline.title}" timed out after ${timeoutMs}ms`);
+          const errMsg = `生成超时：此页面超过 ${Math.round(timeoutMs / 60000)} 分钟仍未完成，已自动停止`;
+          store.getState().addFailedOutline(outline, 'content', errMsg);
+          options.onSceneFailed?.(outline, errMsg);
+          // Abort the current fetch
+          fetchAbortRef.current?.abort('timeout');
+          // Remove from generating list since it's now in failed list
+          store.getState().removeGeneratingOutline(outline.id);
+        }
+      }, remaining);
+    },
+    [clearOutlineTimeout, options, store],
+  );
+
   const stop = useCallback(() => {
     abortRef.current = true;
     store.getState().bumpGenerationEpoch();
     fetchAbortRef.current?.abort();
     mediaAbortRef.current?.abort();
-  }, [store]);
+    clearOutlineTimeout();
+  }, [store, clearOutlineTimeout]);
 
   const isGenerating = useCallback(() => generatingRef.current, []);
 
