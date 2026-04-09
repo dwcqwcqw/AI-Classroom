@@ -142,61 +142,6 @@ export async function listInteractiveFiles(): Promise<InteractiveFileMeta[]> {
   }));
 }
 
-/**
- * Reads bytes from an R2 object regardless of which R2 API shape is returned.
- * Handles: object.arrayBuffer(), object.body.arrayBuffer(), object.body.getReader()
- */
-async function readR2ObjectBytes(object: unknown): Promise<ArrayBuffer> {
-  const anyObject = object as {
-    arrayBuffer?: () => Promise<ArrayBuffer>;
-    body?: {
-      arrayBuffer?: () => Promise<ArrayBuffer>;
-      getReader?: () => ReadableStreamDefaultReader<Uint8Array>;
-    } | null;
-  };
-
-  if (typeof anyObject.arrayBuffer === 'function') {
-    return anyObject.arrayBuffer();
-  }
-
-  if (anyObject.body && typeof anyObject.body.arrayBuffer === 'function') {
-    return anyObject.body.arrayBuffer();
-  }
-
-  if (anyObject.body && typeof anyObject.body.getReader === 'function') {
-    const reader = anyObject.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) {
-        // Normalize to Uint8Array — handle ArrayBuffer, typed-array views, and plain buffers
-        const buf =
-          value instanceof Uint8Array
-            ? value
-            : typeof (value as unknown as ArrayBuffer).byteLength === 'number'
-              ? new Uint8Array(value as unknown as ArrayBuffer)
-              : new Uint8Array(
-                  (value as unknown as { buffer?: ArrayBuffer }).buffer ??
-                    (value as unknown as ArrayBuffer),
-                );
-        chunks.push(buf);
-        total += buf.byteLength;
-      }
-    }
-    const merged = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-      merged.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    return merged.buffer.slice(0);
-  }
-
-  throw new Error('R2 object body is not readable');
-}
-
 export async function getInteractiveFile(lookupKey: string) {
   const db = getD1();
   const r2 = getR2();
@@ -226,9 +171,18 @@ export async function getInteractiveFile(lookupKey: string) {
   const object = await r2.get(row.object_key);
   if (!object) return null;
 
-  let html: ArrayBuffer;
+  let html: string;
   try {
-    html = await readR2ObjectBytes(object);
+    // R2ObjectBody always has .text() — use it directly for HTML content
+    if (object.body && typeof object.body.text === 'function') {
+      html = await object.body.text();
+    } else if (typeof (object as unknown as { text?: () => Promise<string> }).text === 'function') {
+      html = await (object as unknown as { text: () => Promise<string> }).text();
+    } else {
+      // Fallback: decode from arrayBuffer
+      const buf = await (object as unknown as { arrayBuffer: () => Promise<ArrayBuffer> }).arrayBuffer();
+      html = new TextDecoder('utf-8').decode(buf);
+    }
   } catch {
     return null;
   }
