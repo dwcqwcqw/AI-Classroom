@@ -114,8 +114,11 @@ export function Stage({
   const bufferPausedForTTSRef = useRef(false);
   const lastLiveAgentIdRef = useRef<string | null>(null);
 
-  // Live TTS for Q&A / discussion agent responses
+  // Live TTS: only during QA/discussion sessions.
+  // useDiscussionTTS handles lecture/playback; this handles live flows — they must not overlap.
+  const isLiveMode = chatSessionType === 'qa' || chatSessionType === 'discussion';
   const { onLiveSpeech: liveTTSOnSpeech, stopAll: stopLiveTTS, isActive: isTTSActive } = useLiveTTS({
+    enabled: isLiveMode,
     onQueueEmpty: useCallback(() => {
       if (bufferPausedForTTSRef.current) {
         bufferPausedForTTSRef.current = false;
@@ -148,7 +151,10 @@ export function Stage({
   const [audioAgentId, setAudioAgentId] = useState<string | null>(null);
 
   const discussionTTS = useDiscussionTTS({
-    enabled: ttsEnabled && !ttsMuted,
+    // Only active during lecture/playback (chatSessionType is null).
+    // During QA/discussion sessions chatSessionType is 'qa'|'discussion' — disable
+    // so useLiveTTS handles all TTS without double-generation.
+    enabled: ttsEnabled && !ttsMuted && !chatSessionType,
     agents: selectedAgents,
     onAudioStateChange: (agentId, state) => {
       setAudioAgentId(agentId);

@@ -51,15 +51,21 @@ interface QueueItem {
 }
 
 interface UseLiveTTSOptions {
+  /** Whether to process speech at all. Defaults to true. */
+  enabled?: boolean;
   /** Called when the audio queue becomes empty and playback has stopped. */
   onQueueEmpty?: () => void;
 }
 
 export function useLiveTTS(options: UseLiveTTSOptions = {}) {
   const onQueueEmptyRef = useRef(options.onQueueEmpty);
+  const enabledRef = useRef(options.enabled ?? true);
   useEffect(() => {
     onQueueEmptyRef.current = options.onQueueEmpty;
   }, [options.onQueueEmpty]);
+  useEffect(() => {
+    enabledRef.current = options.enabled ?? true;
+  }, [options.enabled]);
   // Per-segment tracking
   const processedIdxRef = useRef(0);      // chars already extracted into sentences
   const pendingAgentIdRef = useRef<string | null>(null);
@@ -236,7 +242,7 @@ export function useLiveTTS(options: UseLiveTTSOptions = {}) {
   const onLiveSpeech = useCallback(
     (text: string | null, agentId: string | null | undefined) => {
       const settings = useSettingsStore.getState();
-      if (!settings.ttsEnabled || settings.ttsMuted) return;
+      if (!enabledRef.current || !settings.ttsEnabled || settings.ttsMuted) return;
       if (settings.ttsProviderId === 'browser-native-tts') return;
 
       if (text !== null) {
