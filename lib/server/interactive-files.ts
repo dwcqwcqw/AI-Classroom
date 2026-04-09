@@ -223,7 +223,7 @@ export interface InteractiveFileResult {
   _diagnostic: {
     lookupKey: string;
     dbFound: boolean;
-    dbRow: { id: string; file_key: string | null; object_key: string } | null;
+    dbRow: { id: string; file_key: string | null | undefined; object_key: string } | null;
     r2ObjectFound: boolean;
     r2ObjectKey: string | null;
     htmlReadSuccess: boolean;
