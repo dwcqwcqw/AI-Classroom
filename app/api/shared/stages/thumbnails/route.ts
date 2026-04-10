@@ -1,7 +1,8 @@
 import { apiError, apiSuccess, API_ERROR_CODES } from '@/lib/server/api-response';
 import { listSharedFiles } from '@/lib/server/shared-files';
 import { db } from '@/lib/utils/database';
-import { log } from '@/lib/logger';
+import { createLogger } from '@/lib/logger';
+const log = createLogger('StageThumbs');
 
 /** Batch thumbnail endpoint: accepts ?ids=id1,id2,...&stageIds=stageId1,stageId2,...
  *  Returns thumbnail canvas data + resolved image URLs for every stage in one shot.
