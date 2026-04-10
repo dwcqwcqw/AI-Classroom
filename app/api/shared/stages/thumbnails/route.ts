@@ -1,13 +1,13 @@
 import { apiError, apiSuccess, API_ERROR_CODES } from '@/lib/server/api-response';
 import { listSharedFiles } from '@/lib/server/shared-files';
-import { db } from '@/lib/utils/database';
+import { getD1, ensureSharedTables } from '@/lib/server/cloudflare-d1';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('StageThumbs');
 
 /** Batch thumbnail endpoint: accepts ?stageIds=id1,id2,...
  *  Returns thumbnail canvas data + resolved image URLs for every stage in one shot.
- *  Replaces the N+1 loop in getFirstSlideByStages().
+ *  Uses D1 (Cloudflare) to avoid N+1 round-trips.
  */
 export async function GET(request: Request) {
   try {
@@ -21,15 +21,26 @@ export async function GET(request: Request) {
       return apiSuccess({ thumbnails: {} });
     }
 
-    // Fetch stage rows via Dexie anyOf() (equivalent to SQL WHERE id IN (...))
-    const rows = stageIds.length > 0
-      ? await db.stages.where('id').anyOf(stageIds).toArray()
-      : [];
+    const db = getD1();
+    if (!db) {
+      return apiError(API_ERROR_CODES.INTERNAL_ERROR, 500, 'D1 database not available');
+    }
+
+    await ensureSharedTables(db);
+
+    // Fetch stage_json + scenes_json for all requested stages in one query
+    const placeholders = stageIds.map(() => '?').join(',');
+    const { results } = await db
+      .prepare(
+        `SELECT id, stage_json, scenes_json FROM shared_stages WHERE id IN (${placeholders})`,
+      )
+      .bind(...stageIds)
+      .all<{ id: string; stage_json: string; scenes_json: string }>();
 
     const thumbnails: Record<string, object | null> = {};
 
     for (const stageId of stageIds) {
-      const row = rows.find((r) => r.id === stageId);
+      const row = results?.find((r) => r.id === stageId);
       if (!row) {
         thumbnails[stageId] = null;
         continue;
@@ -37,7 +48,7 @@ export async function GET(request: Request) {
 
       let storeData: object | null = null;
       try {
-        const parsed = JSON.parse(row.data);
+        const parsed = JSON.parse(row.scenes_json);
         storeData = parsed;
       } catch {
         thumbnails[stageId] = null;
