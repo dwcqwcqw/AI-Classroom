@@ -52,9 +52,9 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
    * Lookahead cache: keyed by partId, stores pre-generated audio (base64 data URL).
    * Speeds up the next queue item by skipping the API round-trip entirely.
    */
-  const lookaheadCache = useRef<Map<string, { audioUrl: string; format: string }>>(new Map());
+  const lookaheadCache = useRef<Map<string, { audioUrl: string; format: string }> | null>(new Map());
   /** Active lookahead fetch partIds (prevents duplicate concurrent fetches for the same item) */
-  const lookaheadPending = useRef<Set<string>>(new Set());
+  const lookaheadPending = useRef<Set<string> | null>(new Set());
 
   const {
     speak: browserSpeak,
@@ -119,9 +119,9 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
   const triggerLookahead = useCallback(
     (nextItem: QueueItem) => {
       if (nextItem.providerId === 'browser-native-tts') return;
-      if (lookaheadCache.has(nextItem.partId) || lookaheadPending.has(nextItem.partId)) return;
+      if (lookaheadCache.current!.has(nextItem.partId) || lookaheadPending.current!.has(nextItem.partId)) return;
       const config = ttsProvidersConfig[nextItem.providerId];
-      lookaheadPending.add(nextItem.partId);
+      lookaheadPending.current!.add(nextItem.partId);
       fetch('/api/generate/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -139,14 +139,14 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
         .then((res) => (res.ok ? res.json() : null))
         .then((data) => {
           if (data?.base64) {
-            lookaheadCache.set(nextItem.partId, {
+            lookaheadCache.current!.set(nextItem.partId, {
               audioUrl: `data:audio/${data.format || 'mp3'};base64,${data.base64}`,
               format: data.format || 'mp3',
             });
           }
         })
         .catch(() => {})
-        .finally(() => { lookaheadPending.delete(nextItem.partId); });
+        .finally(() => { lookaheadPending.current!.delete(nextItem.partId); });
     },
     [ttsProvidersConfig, ttsSpeed],
   );
@@ -191,9 +191,9 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       const config = ttsProvidersConfig[item.providerId];
 
       // Fast path: reuse pre-generated audio from lookahead cache (zero latency)
-      const cached = lookaheadCache.get(item.partId);
+      const cached = lookaheadCache.current!.get(item.partId);
       if (cached) {
-        lookaheadCache.delete(item.partId);
+        lookaheadCache.current!.delete(item.partId);
         const audio = new Audio(cached.audioUrl);
         audio.playbackRate = playbackSpeed;
         audio.volume = ttsMuted ? 0 : ttsVolume;
@@ -282,8 +282,8 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
     }
     browserCancelRef.current();
     queueRef.current = [];
-    lookaheadCache.current.clear();
-    lookaheadPending.current.clear();
+    lookaheadCache.current!.clear();
+    lookaheadPending.current!.clear();
     isPlayingRef.current = false;
     segmentDoneCounterRef.current = 0;
     onAudioStateChangeRef.current?.(null, 'idle');
