@@ -5,6 +5,9 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { listStages, getFirstSlideByStages, type StageListItem } from '@/lib/utils/stage-storage';
 import { ThumbnailSlide } from '@/components/slide-renderer/components/ThumbnailSlide';
 import type { Slide } from '@/lib/types/slides';
+import { createLogger } from '@/lib/logger';
+
+const log = createLogger('Courses');
 
 function formatDate(ts: number) {
   try {
@@ -20,9 +23,34 @@ function formatDate(ts: number) {
   }
 }
 
+/** Preload a single image src in the background, fire-and-forget. */
+function preloadImage(src: string): void {
+  if (!src) return;
+  const img = new Image();
+  img.src = src;
+}
+
+/** Extract all image src strings from a slide's elements (recursive). */
+function extractImageSrcs(slide: Slide): string[] {
+  if (!slide?.elements) return [];
+  const srcs: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const collect = (els: any[]) => {
+    for (const el of els) {
+      if (el.type === 'image' && typeof el.src === 'string' && el.src.startsWith('/api/')) {
+        srcs.push(el.src);
+      }
+      if (Array.isArray(el.children)) collect(el.children);
+    }
+  };
+  collect(slide.elements);
+  return srcs;
+}
+
 function CourseCard({ stage, slide }: { stage: StageListItem; slide?: Slide }) {
   const thumbRef = useRef<HTMLDivElement>(null);
   const [thumbWidth, setThumbWidth] = useState(0);
+  const [isIntersecting, setIsIntersecting] = useState(false);
 
   useEffect(() => {
     const el = thumbRef.current;
@@ -33,6 +61,24 @@ function CourseCard({ stage, slide }: { stage: StageListItem; slide?: Slide }) {
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  // Intersection Observer: only load image when card scrolls into viewport (+200px head start)
+  useEffect(() => {
+    const el = thumbRef.current;
+    if (!el) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setIsIntersecting(true);
+          if (slide) extractImageSrcs(slide).forEach(preloadImage);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: '200px' },
+    );
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [slide]);
 
   return (
     <Link
@@ -49,6 +95,7 @@ function CourseCard({ stage, slide }: { stage: StageListItem; slide?: Slide }) {
             size={thumbWidth}
             viewportSize={slide.viewportSize ?? 1000}
             viewportRatio={slide.viewportRatio ?? 0.5625}
+            visible={isIntersecting}
           />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center text-sm text-muted-foreground">
@@ -83,6 +130,14 @@ export default function CoursesPage() {
         const firstSlides = await getFirstSlideByStages(list.map((s) => s.id));
         if (!alive) return;
         setThumbnails(firstSlides);
+
+        // Batch preload all images from thumbnails in the background
+        const allSrcs = new Set<string>();
+        for (const slide of Object.values(firstSlides)) {
+          extractImageSrcs(slide).forEach((s) => allSrcs.add(s));
+        }
+        allSrcs.forEach(preloadImage);
+        log.info(`[Courses] Batch preloading ${allSrcs.size} thumbnail images`);
       } catch {
         if (!alive) return;
         setStages([]);

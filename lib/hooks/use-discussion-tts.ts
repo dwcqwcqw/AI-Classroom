@@ -34,14 +34,12 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
   const ttsMuted = useSettingsStore((s) => s.ttsMuted);
   const ttsVolume = useSettingsStore((s) => s.ttsVolume);
   const playbackSpeed = useSettingsStore((s) => s.playbackSpeed);
-  // Global lecture voice — used as fallback for teacher agent
   const globalTtsProviderId = useSettingsStore((s) => s.ttsProviderId);
   const globalTtsVoice = useSettingsStore((s) => s.ttsVoice);
 
   const queueRef = useRef<QueueItem[]>([]);
   const isPlayingRef = useRef(false);
   const pausedRef = useRef(false);
-  /** Tracks which TTS provider is currently speaking (for pause/resume delegation) */
   const currentProviderRef = useRef<TTSProviderId | null>(null);
   const segmentDoneCounterRef = useRef(0);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -49,6 +47,14 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
   const onAudioStateChangeRef = useRef(onAudioStateChange);
   onAudioStateChangeRef.current = onAudioStateChange;
   const processQueueRef = useRef<() => void>(() => {});
+
+  /**
+   * Lookahead cache: keyed by partId, stores pre-generated audio (base64 data URL).
+   * Speeds up the next queue item by skipping the API round-trip entirely.
+   */
+  const lookaheadCache = useRef<Map<string, { audioUrl: string; format: string }>>(new Map());
+  /** Active lookahead fetch partIds (prevents duplicate concurrent fetches for the same item) */
+  const lookaheadPending = useRef<Set<string>>(new Set());
 
   const {
     speak: browserSpeak,
@@ -61,10 +67,7 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       isPlayingRef.current = false;
       segmentDoneCounterRef.current++;
       onAudioStateChangeRef.current?.(null, 'idle');
-      // Don't advance queue while paused — resume() will kick-start it
-      if (!pausedRef.current) {
-        processQueueRef.current();
-      }
+      if (!pausedRef.current) processQueueRef.current();
     },
   });
   const browserCancelRef = useRef(browserCancel);
@@ -76,7 +79,6 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
   const browserResumeRef = useRef(browserResume);
   browserResumeRef.current = browserResume;
 
-  // Build agent index map for deterministic voice resolution
   const agentIndexMap = useRef<Map<string, number>>(new Map());
   useEffect(() => {
     const map = new Map<string, number>();
@@ -89,25 +91,17 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       const providers = getAvailableProvidersWithVoices(ttsProvidersConfig);
       if (!agentId) {
         if (providers.length > 0) {
-          return {
-            providerId: providers[0].providerId,
-            voiceId: providers[0].voices[0]?.id ?? 'default',
-          };
+          return { providerId: providers[0].providerId, voiceId: providers[0].voices[0]?.id ?? 'default' };
         }
         return { providerId: 'browser-native-tts', voiceId: 'default' };
       }
       const agent = agents.find((a) => a.id === agentId);
       if (!agent) {
         if (providers.length > 0) {
-          return {
-            providerId: providers[0].providerId,
-            voiceId: providers[0].voices[0]?.id ?? 'default',
-            modelId: undefined,
-          };
+          return { providerId: providers[0].providerId, voiceId: providers[0].voices[0]?.id ?? 'default', modelId: undefined };
         }
         return { providerId: 'browser-native-tts', voiceId: 'default', modelId: undefined };
       }
-      // Teacher: always use global lecture voice (single source of truth with settings)
       if (agent.role === 'teacher') {
         return {
           providerId: globalTtsProviderId,
@@ -121,8 +115,57 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
     [agents, ttsProvidersConfig, globalTtsProviderId, globalTtsVoice],
   );
 
+  /** Kick off a background TTS fetch for the next queued item, caching the result. */
+  const triggerLookahead = useCallback(
+    (nextItem: QueueItem) => {
+      if (nextItem.providerId === 'browser-native-tts') return;
+      if (lookaheadCache.has(nextItem.partId) || lookaheadPending.has(nextItem.partId)) return;
+      const config = ttsProvidersConfig[nextItem.providerId];
+      lookaheadPending.add(nextItem.partId);
+      fetch('/api/generate/tts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          text: nextItem.text,
+          audioId: nextItem.partId,
+          ttsProviderId: nextItem.providerId,
+          ttsModelId: nextItem.modelId || config?.modelId,
+          ttsVoice: nextItem.voiceId,
+          ttsSpeed,
+          ttsApiKey: config?.apiKey,
+          ttsBaseUrl: config?.serverBaseUrl || config?.baseUrl,
+        }),
+      })
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data?.base64) {
+            lookaheadCache.set(nextItem.partId, {
+              audioUrl: `data:audio/${data.format || 'mp3'};base64,${data.base64}`,
+              format: data.format || 'mp3',
+            });
+          }
+        })
+        .catch(() => {})
+        .finally(() => { lookaheadPending.delete(nextItem.partId); });
+    },
+    [ttsProvidersConfig, ttsSpeed],
+  );
+
+  /** Attach standard ended/error listeners to an HTMLAudioElement and track it in audioRef. */
+  const attachListeners = (audio: HTMLAudioElement, agentId: string | null) => {
+    const handleDone = () => {
+      audioRef.current = null;
+      isPlayingRef.current = false;
+      segmentDoneCounterRef.current++;
+      onAudioStateChangeRef.current?.(agentId, 'idle');
+      if (!pausedRef.current) queueMicrotask(() => processQueueRef.current());
+    };
+    audio.addEventListener('ended', handleDone);
+    audio.addEventListener('error', handleDone);
+  };
+
   const processQueue = useCallback(async () => {
-    if (pausedRef.current) return; // Don't advance while paused
+    if (pausedRef.current) return;
     if (isPlayingRef.current || queueRef.current.length === 0) return;
     if (!enabled || ttsMuted) {
       queueRef.current = [];
@@ -132,7 +175,6 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
     isPlayingRef.current = true;
     const item = queueRef.current.shift()!;
 
-    // Browser TTS
     if (item.providerId === 'browser-native-tts') {
       currentProviderRef.current = item.providerId;
       onAudioStateChangeRef.current?.(item.agentId, 'playing');
@@ -140,14 +182,31 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       return;
     }
 
-    // Server TTS — use the item's provider, not the global one
     currentProviderRef.current = item.providerId;
     onAudioStateChangeRef.current?.(item.agentId, 'generating');
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
     try {
-      const providerConfig = ttsProvidersConfig[item.providerId];
+      const config = ttsProvidersConfig[item.providerId];
+
+      // Fast path: reuse pre-generated audio from lookahead cache (zero latency)
+      const cached = lookaheadCache.get(item.partId);
+      if (cached) {
+        lookaheadCache.delete(item.partId);
+        const audio = new Audio(cached.audioUrl);
+        audio.playbackRate = playbackSpeed;
+        audio.volume = ttsMuted ? 0 : ttsVolume;
+        audioRef.current = audio;
+        attachListeners(audio, item.agentId);
+        if (pausedRef.current) { onAudioStateChangeRef.current?.(item.agentId, 'playing'); audio.pause(); return; }
+        onAudioStateChangeRef.current?.(item.agentId, 'playing');
+        await audio.play();
+        if (queueRef.current.length > 0) triggerLookahead(queueRef.current[0]);
+        return;
+      }
+
+      // Normal path: call TTS API
       const res = await fetch('/api/generate/tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -155,17 +214,16 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
           text: item.text,
           audioId: item.partId,
           ttsProviderId: item.providerId,
-          ttsModelId: item.modelId || providerConfig?.modelId,
+          ttsModelId: item.modelId || config?.modelId,
           ttsVoice: item.voiceId,
-          ttsSpeed: ttsSpeed,
-          ttsApiKey: providerConfig?.apiKey,
-          ttsBaseUrl: providerConfig?.serverBaseUrl || providerConfig?.baseUrl,
+          ttsSpeed,
+          ttsApiKey: config?.apiKey,
+          ttsBaseUrl: config?.serverBaseUrl || config?.baseUrl,
         }),
         signal: controller.signal,
       });
 
       if (!res.ok) throw new Error(`TTS API error: ${res.status}`);
-
       const data = await res.json();
       if (!data.base64) throw new Error('No audio in response');
 
@@ -174,34 +232,14 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       audio.playbackRate = playbackSpeed;
       audio.volume = ttsMuted ? 0 : ttsVolume;
       audioRef.current = audio;
-      audio.addEventListener('ended', () => {
-        audioRef.current = null;
-        isPlayingRef.current = false;
-        segmentDoneCounterRef.current++;
-        onAudioStateChangeRef.current?.(item.agentId, 'idle');
-        if (!pausedRef.current) {
-          queueMicrotask(() => processQueueRef.current());
-        }
-      });
-      audio.addEventListener('error', () => {
-        audioRef.current = null;
-        isPlayingRef.current = false;
-        segmentDoneCounterRef.current++;
-        onAudioStateChangeRef.current?.(item.agentId, 'idle');
-        if (!pausedRef.current) {
-          queueMicrotask(() => processQueueRef.current());
-        }
-      });
+      attachListeners(audio, item.agentId);
 
-      // If paused during TTS generation, keep audio ready but don't play
-      if (pausedRef.current) {
-        onAudioStateChangeRef.current?.(item.agentId, 'playing');
-        audio.pause();
-        return;
-      }
-
+      if (pausedRef.current) { onAudioStateChangeRef.current?.(item.agentId, 'playing'); audio.pause(); return; }
       onAudioStateChangeRef.current?.(item.agentId, 'playing');
       await audio.play();
+
+      // While audio plays, pre-generate the next TTS in the background
+      if (queueRef.current.length > 0) triggerLookahead(queueRef.current[0]);
     } catch (err) {
       if ((err as Error).name !== 'AbortError') {
         console.error('[DiscussionTTS] TTS generation failed:', err);
@@ -210,11 +248,9 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       isPlayingRef.current = false;
       segmentDoneCounterRef.current++;
       onAudioStateChangeRef.current?.(item.agentId, 'idle');
-      if (!pausedRef.current) {
-        queueMicrotask(() => processQueueRef.current());
-      }
+      if (!pausedRef.current) queueMicrotask(() => processQueueRef.current());
     }
-  }, [enabled, ttsMuted, ttsVolume, ttsProvidersConfig, ttsSpeed, playbackSpeed]);
+  }, [enabled, ttsMuted, ttsVolume, ttsProvidersConfig, ttsSpeed, playbackSpeed, triggerLookahead]);
 
   processQueueRef.current = processQueue;
 
@@ -223,15 +259,7 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
       if (!enabled || ttsMuted || !fullText.trim()) return;
 
       const { providerId, modelId, voiceId } = resolveVoiceForAgent(agentId);
-      queueRef.current.push({
-        messageId,
-        partId,
-        text: fullText,
-        agentId,
-        providerId,
-        modelId,
-        voiceId,
-      });
+      queueRef.current.push({ messageId, partId, text: fullText, agentId, providerId, modelId, voiceId });
 
       if (!isPlayingRef.current) {
         processQueueRef.current();
@@ -254,12 +282,13 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
     }
     browserCancelRef.current();
     queueRef.current = [];
+    lookaheadCache.current.clear();
+    lookaheadPending.current.clear();
     isPlayingRef.current = false;
     segmentDoneCounterRef.current = 0;
     onAudioStateChangeRef.current?.(null, 'idle');
   }, []);
 
-  /** Pause TTS audio (browser-native or server). Does NOT stop the SSE stream. */
   const pause = useCallback(() => {
     if (pausedRef.current) return;
     pausedRef.current = true;
@@ -270,7 +299,6 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
     }
   }, []);
 
-  /** Resume TTS audio. If the previous utterance already ended while paused, advance the queue. */
   const resume = useCallback(() => {
     if (!pausedRef.current) return;
     pausedRef.current = false;
@@ -279,32 +307,20 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
     } else if (audioRef.current && audioRef.current.paused) {
       audioRef.current.play();
     } else if (!isPlayingRef.current) {
-      // Audio finished while paused — kick-start the queue
       processQueueRef.current();
     }
   }, []);
 
-  // Sync playbackSpeed to currently playing audio in real-time
   useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.playbackRate = playbackSpeed;
-    }
+    if (audioRef.current) audioRef.current.playbackRate = playbackSpeed;
   }, [playbackSpeed]);
 
-  // Sync volume and mute to currently playing audio in real-time
   useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = ttsMuted ? 0 : ttsVolume;
-    }
+    if (audioRef.current) audioRef.current.volume = ttsMuted ? 0 : ttsVolume;
   }, [ttsVolume, ttsMuted]);
 
   useEffect(() => cleanup, [cleanup]);
 
-  /**
-   * Returns true when TTS audio for the *current* segment is still playing.
-   * Uses a monotonic counter so the buffer releases as soon as one segment's
-   * audio finishes, even if the next segment starts immediately.
-   */
   const shouldHold = useCallback(() => {
     return {
       holding: isPlayingRef.current || queueRef.current.length > 0,
@@ -312,11 +328,5 @@ export function useDiscussionTTS({ enabled, agents, onAudioStateChange }: Discus
     };
   }, []);
 
-  return {
-    handleSegmentSealed,
-    cleanup,
-    pause,
-    resume,
-    shouldHold,
-  };
+  return { handleSegmentSealed, cleanup, pause, resume, shouldHold };
 }
