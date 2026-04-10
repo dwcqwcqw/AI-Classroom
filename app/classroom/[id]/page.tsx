@@ -25,7 +25,8 @@ type LoadStep =
   | 'local_storage'
   | 'server_storage'
   | 'media_tasks'
-  | 'agent_registry';
+  | 'agent_registry'
+  | 'audio_preload';
 
 interface StepStatus {
   label: string;
@@ -38,6 +39,7 @@ const STEP_LABELS: Record<LoadStep, string> = {
   server_storage: '服务端数据加载 (API)',
   media_tasks: '媒体任务恢复',
   agent_registry: 'Agent 配置加载',
+  audio_preload: '音频缓冲中',
 };
 
 function makeSteps(): Record<LoadStep, StepStatus> {
@@ -46,6 +48,7 @@ function makeSteps(): Record<LoadStep, StepStatus> {
     server_storage: { label: STEP_LABELS.server_storage, status: 'pending' },
     media_tasks: { label: STEP_LABELS.media_tasks, status: 'pending' },
     agent_registry: { label: STEP_LABELS.agent_registry, status: 'pending' },
+    audio_preload: { label: STEP_LABELS.audio_preload, status: 'pending' },
   };
 }
 
@@ -69,6 +72,7 @@ export default function ClassroomDetailPage() {
   const [retryCount, setRetryCount] = useState(0);
   const [steps, setSteps] = useState<Record<LoadStep, StepStatus>>(makeSteps);
   const [timedOut, setTimedOut] = useState(false);
+  const [audioPreloadProgress, setAudioPreloadProgress] = useState({ loaded: 0, total: 0 });
 
   const generationStartedRef = useRef(false);
   const audioMigrationStartedRef = useRef(false);
@@ -231,6 +235,37 @@ export default function ClassroomDetailPage() {
 
         if (abort.signal.aborted) return;
 
+        // ── Audio preloading: start as early as possible with abort signal ──
+        const { scenes } = useStageStore.getState();
+        const audioIds: string[] = [];
+        for (const scene of scenes) {
+          for (const action of scene.actions ?? []) {
+            if (action.type === 'speech' && action.audioId) {
+              audioIds.push(action.audioId);
+            }
+          }
+        }
+
+        if (audioIds.length > 0) {
+          updateStep('audio_preload', 'running', `准备缓冲 ${audioIds.length} 个音频…`);
+          log.info(`[Classroom] Starting audio preload: ${audioIds.length} files`);
+
+          // Fire-and-forget preload — runs in background while user starts interacting
+          preloadAudio(audioIds, {
+            concurrency: 8,
+            signal: abort.signal,
+            onProgress: (loaded, total) => {
+              updateStep('audio_preload', 'running', `${loaded}/${total}`);
+            },
+          }).then(() => {
+            updateStep('audio_preload', 'ok', `${audioIds.length} 个音频缓冲完成`);
+          }).catch(() => {
+            updateStep('audio_preload', 'warn', '部分音频缓冲失败');
+          });
+        } else {
+          updateStep('audio_preload', 'ok', '无需缓冲（无语音内容）');
+        }
+
         clearTimeout(timeoutRef.current!);
         setLoading(false);
         setError(null);
@@ -329,7 +364,7 @@ export default function ClassroomDetailPage() {
     }
   }, [loading, error, generateRemaining]);
 
-  // ── Audio preloading: collect all audioIds from scenes and prefetch in background ──
+  // ── Audio preloading (fallback): if scenes change after initial load (e.g. resume) ──
   useEffect(() => {
     if (loading || error) return;
     if (typeof window === 'undefined') return;
@@ -337,7 +372,6 @@ export default function ClassroomDetailPage() {
     const { scenes } = useStageStore.getState();
     if (!scenes.length) return;
 
-    // Extract audioIds from speech actions across all scenes
     const audioIds = new Set<string>();
     for (const scene of scenes) {
       for (const action of scene.actions ?? []) {
@@ -349,9 +383,9 @@ export default function ClassroomDetailPage() {
 
     if (audioIds.size === 0) return;
 
-    // Fire-and-forget: preload in background, up to 4 concurrent fetches
-    preloadAudio([...audioIds]);
-    log.info(`[Classroom] Preloading ${audioIds.size} audio files`);
+    // Fire-and-forget: preload in background, up to 8 concurrent fetches
+    preloadAudio([...audioIds], { concurrency: 8 });
+    log.info(`[Classroom] Preloading ${audioIds.size} audio files (fallback)`);
   }, [loading, error]);
 
   // Auto-migrate legacy local-only TTS audio to R2 in the background once the classroom is ready.

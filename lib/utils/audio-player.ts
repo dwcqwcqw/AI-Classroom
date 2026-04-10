@@ -52,58 +52,83 @@ function getCachedBuffer(audioId: string): AudioBuffer | null {
 }
 
 /** Fetch + decode a single audioId and store in cache. Returns the buffer (or null). */
-async function fetchAndDecode(audioId: string): Promise<AudioBuffer | null> {
+async function fetchAndDecode(
+  audioId: string,
+  signal?: AbortSignal,
+): Promise<{ id: string; buffer: AudioBuffer | null }> {
   const cached = getCachedBuffer(audioId);
-  if (cached) return cached;
+  if (cached) return { id: audioId, buffer: cached };
 
   const record = await db.audioFiles.get(audioId).catch(() => undefined);
-  if (!record?.ossKey) return null;
+  if (!record?.ossKey) return { id: audioId, buffer: null };
 
   let bytes: ArrayBuffer;
   try {
-    bytes = await fetchAudioBytes(record.ossKey);
+    bytes = await fetchAudioBytes(record.ossKey, signal);
   } catch {
-    return null;
+    return { id: audioId, buffer: null };
   }
 
   const ctx = getAudioContext();
-  if (!ctx) return null;
+  if (!ctx) return { id: audioId, buffer: null };
 
   try {
     const buffer = await ctx.decodeAudioData(bytes.slice(0));
     cacheAudioBuffer(audioId, buffer);
-    return buffer;
+    return { id: audioId, buffer };
   } catch {
-    return null;
+    return { id: audioId, buffer: null };
   }
 }
 
 /**
- * Preload multiple audio files in parallel.
- * Call this after a classroom loads so the audio is ready before user clicks play.
+ * Preload multiple audio files in parallel with abort support and progress callback.
+ * Call this as early as possible — even while scenes are still loading from server.
  *
- * @param audioIds  Array of audioId strings to prefetch. Duplicates are ignored.
- * @param concurrency  Max simultaneous fetches. Default 4 (avoids overwhelming the connection).
+ * @param audioIds       Array of audioId strings to prefetch. Duplicates are ignored.
+ * @param options.concurrency  Max simultaneous fetches. Default 8.
+ * @param options.signal       AbortSignal to cancel in-flight requests on page unload.
+ * @param options.onProgress   Called each time an audio finishes: (loaded, total).
+ * @returns Promise that resolves when all audio is prefetched (or aborted).
  */
-export function preloadAudio(audioIds: string[], concurrency = 4): void {
+export function preloadAudio(
+  audioIds: string[],
+  {
+    concurrency = 8,
+    signal,
+    onProgress,
+  }: {
+    concurrency?: number;
+    signal?: AbortSignal;
+    onProgress?: (loaded: number, total: number) => void;
+  } = {},
+): Promise<void> {
   const unique = [...new Set(audioIds.filter(Boolean))];
-  if (unique.length === 0) return;
+  const total = unique.length;
+  if (total === 0) return Promise.resolve();
 
-  // Kick off at most `concurrency` fetches in parallel; rest are fire-and-forget.
+  if (signal?.aborted) return Promise.resolve();
+
+  let loaded = 0;
   const queue = [...unique];
   const workers: Promise<void>[] = [];
 
   const worker = async () => {
     while (queue.length > 0) {
+      if (signal?.aborted) break;
       const id = queue.shift()!;
-      // Fire-and-forget: errors are swallowed; cache handles misses silently.
-      await fetchAndDecode(id).catch(() => {});
+      await fetchAndDecode(id, signal).catch(() => {});
+      if (signal?.aborted) break;
+      loaded++;
+      onProgress?.(loaded, total);
     }
   };
 
-  for (let i = 0; i < Math.min(concurrency, unique.length); i++) {
+  for (let i = 0; i < Math.min(concurrency, total); i++) {
     workers.push(worker());
   }
+
+  return Promise.all(workers).then(() => {});
 }
 
 export function getAudioContext(): AudioContext | null {
@@ -134,8 +159,8 @@ async function ensureContextRunning(): Promise<void> {
 
 // ─── Fetch audio bytes ────────────────────────────────────────────────────────
 
-async function fetchAudioBytes(url: string): Promise<ArrayBuffer> {
-  const res = await fetch(url);
+async function fetchAudioBytes(url: string, signal?: AbortSignal): Promise<ArrayBuffer> {
+  const res = await fetch(url, { signal });
   if (!res.ok) throw new Error(`Audio fetch failed: ${res.status}`);
   return res.arrayBuffer();
 }
