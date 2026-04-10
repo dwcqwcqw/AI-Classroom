@@ -2,9 +2,10 @@ import { apiError, apiSuccess, API_ERROR_CODES } from '@/lib/server/api-response
 import { listSharedFiles } from '@/lib/server/shared-files';
 import { db } from '@/lib/utils/database';
 import { createLogger } from '@/lib/logger';
+
 const log = createLogger('StageThumbs');
 
-/** Batch thumbnail endpoint: accepts ?ids=id1,id2,...&stageIds=stageId1,stageId2,...
+/** Batch thumbnail endpoint: accepts ?stageIds=id1,id2,...
  *  Returns thumbnail canvas data + resolved image URLs for every stage in one shot.
  *  Replaces the N+1 loop in getFirstSlideByStages().
  */
@@ -20,24 +21,16 @@ export async function GET(request: Request) {
       return apiSuccess({ thumbnails: {} });
     }
 
-    type StageRow = {
-      data: string;
-    };
-
-    const rows = await db
-      .prepare(
-        `SELECT id, data FROM ${db.stages.name} WHERE id IN (${stageIds.map(() => '?').join(',')})`,
-      )
-      .bind(...stageIds)
-      .all<StageRow>();
+    // Fetch stage rows via Dexie anyOf() (equivalent to SQL WHERE id IN (...))
+    const rows = stageIds.length > 0
+      ? await db.stages.where('id').anyOf(stageIds).toArray()
+      : [];
 
     const thumbnails: Record<string, object | null> = {};
-    const missingStageIds: string[] = [];
 
     for (const stageId of stageIds) {
-      const row = rows.results?.find((r) => r.id === stageId);
+      const row = rows.find((r) => r.id === stageId);
       if (!row) {
-        missingStageIds.push(stageId);
         thumbnails[stageId] = null;
         continue;
       }
