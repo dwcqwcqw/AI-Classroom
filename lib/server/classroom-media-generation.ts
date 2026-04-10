@@ -241,7 +241,7 @@ export async function generateTTSForClassroom(
     if (!scene.actions) continue;
     scene.actions = splitLongSpeechActions(scene.actions, providerId);
     for (const action of scene.actions) {
-      if (action.type !== 'speech' && action.type !== 'narrate') continue;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const speechAction = action as SpeechAction;
       if (!speechAction.text) continue;
       const audioId = `tts_${action.id}`;
