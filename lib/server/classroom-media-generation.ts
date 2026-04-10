@@ -27,6 +27,8 @@ import {
   resolveTTSApiKey,
   resolveTTSBaseUrl,
 } from '@/lib/server/provider-config';
+import { getR2 } from '@/lib/server/cloudflare-r2';
+import { getD1, ensureSharedTables } from '@/lib/server/cloudflare-d1';
 import type { SceneOutline } from '@/lib/types/generation';
 import type { Scene } from '@/lib/types/stage';
 import type { SpeechAction } from '@/lib/types/action';
@@ -228,6 +230,17 @@ export async function generateTTSForClassroom(
   const voice = DEFAULT_TTS_VOICES[providerId] || 'default';
   const format = TTS_PROVIDERS[providerId]?.supportedFormats?.[0] || 'mp3';
 
+  // Prepare R2 + D1 for persistent audio storage (enables fast client-side playback)
+  const r2 = getR2();
+  const d1 = getD1();
+  if (r2 && d1) {
+    await ensureSharedTables(d1);
+  } else {
+    log.warn('R2 or D1 not available — audio will only be stored on local disk (slow playback)');
+  }
+
+  const mimeType = format === 'wav' ? 'audio/wav' : format === 'ogg' ? 'audio/ogg' : format === 'aac' ? 'audio/aac' : 'audio/mpeg';
+
   // Collect all speech actions and their audio IDs upfront
   type SpeechTask = {
     scene: Scene;
@@ -283,9 +296,31 @@ export async function generateTTSForClassroom(
     }
     const { task, result } = settled.value;
     try {
+      // Always write to local disk (needed for local dev / classroom-media API)
       await fs.writeFile(path.join(audioDir, task.filename), result.audio);
+
+      // Upload to R2 + D1 so client can fetch from IndexedDB (fast path)
+      if (r2 && d1) {
+        const objectKey = `shared/${classroomId}/${task.audioId}.${format}`;
+        await r2.put(objectKey, result.audio, {
+          httpMetadata: { contentType: mimeType },
+        });
+        const now = Date.now();
+        await d1
+          .prepare(
+            `INSERT OR REPLACE INTO shared_files (id, stage_id, file_name, object_key, mime_type, size_bytes, kind, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .bind(task.audioId, classroomId, `${task.audioId}.${format}`, objectKey, mimeType, result.audio.byteLength, 'audio', now)
+          .run();
+        // audioUrl points to R2-backed shared-files API (fast client-side fetch)
+        task.action.audioUrl = `/api/shared/files/${encodeURIComponent(task.audioId)}`;
+      } else {
+        // Fallback: serve from local disk
+        task.action.audioUrl = mediaServingUrl(baseUrl, classroomId, `audio/${task.filename}`);
+      }
+
       task.action.audioId = task.audioId;
-      task.action.audioUrl = mediaServingUrl(baseUrl, classroomId, `audio/${task.filename}`);
       successCount++;
     } catch (writeErr) {
       log.warn(`TTS write failed for ${task.filename}:`, writeErr);
