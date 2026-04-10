@@ -165,73 +165,38 @@ export async function listStages(): Promise<StageListItem[]> {
  * Get first slide scene's canvas data for each stage (for thumbnail preview).
  * Also resolves gen_img_* placeholders from mediaFiles so thumbnails show real images.
  * Returns a map of stageId -> Slide (canvas data with resolved images)
+ *
+ * Uses the batch thumbnails endpoint (/api/shared/stages/thumbnails) to avoid N+1.
  */
 export async function getFirstSlideByStages(
   stageIds: string[],
 ): Promise<Record<string, import('../types/slides').Slide>> {
-  const result: Record<string, import('../types/slides').Slide> = {};
+  if (stageIds.length === 0) return {};
+
   try {
-    await Promise.all(
-      stageIds.map(async (stageId) => {
-        const res = await fetch(`/api/shared/stages/${encodeURIComponent(stageId)}`);
-        if (!res.ok) return;
-
-        const json = (await res.json()) as {
-          success: boolean;
-          data?: StageStoreData | { data?: StageStoreData };
-        };
-        const payload = json.data;
-        if (!payload) return;
-
-        const storeData =
-          'stage' in payload ? (payload as StageStoreData) : ((payload.data ?? null) as StageStoreData | null);
-        if (!storeData) return;
-
-        const firstSlide = storeData.scenes.find((s) => s.content?.type === 'slide');
-        if (!firstSlide || firstSlide.content.type !== 'slide') return;
-
-        const slide = structuredClone(firstSlide.content.canvas);
-
-        // Resolve generated media placeholders (gen_img_*/gen_vid_*) from shared files API.
-        // On homepage we cannot rely on local media store, so map by uploaded filename prefix.
-        const placeholders = slide.elements.filter(
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (el: any) => el.type === 'image' && typeof el.src === 'string' && /^gen_(img|vid)_[\w-]+$/i.test(el.src),
-        ) as Array<{ src: string }>;
-
-        if (placeholders.length > 0) {
-          const filesRes = await fetch(`/api/shared/files?stageId=${encodeURIComponent(stageId)}`);
-          if (filesRes.ok) {
-            const filesJson = (await filesRes.json()) as {
-              success: boolean;
-              files?: Array<{ id: string; fileName: string; kind: string }>;
-            };
-            const files = filesJson.files ?? [];
-
-            const imageFileByElementId = new Map<string, string>();
-            for (const f of files) {
-              if (f.kind !== 'image') continue;
-              // Uploaded names are like: gen_img_xxx.png or gen_vid_xxx-poster.png
-              const base = f.fileName.replace(/\.[^.]+$/, '');
-              const normalized = base.endsWith('-poster') ? base.slice(0, -7) : base;
-              if (!imageFileByElementId.has(normalized)) {
-                imageFileByElementId.set(normalized, `/api/shared/files/${encodeURIComponent(f.id)}`);
-              }
-            }
-
-            for (const el of placeholders) {
-              el.src = imageFileByElementId.get(el.src) ?? '';
-            }
-          }
-        }
-
-        result[stageId] = slide;
-      }),
+    const res = await fetch(
+      `/api/shared/stages/thumbnails?stageIds=${stageIds.map((id) => encodeURIComponent(id)).join(',')}`,
     );
+    if (!res.ok) throw new Error(`Batch thumbnail API failed: ${res.status}`);
+
+    const json = (await res.json()) as {
+      success: boolean;
+      data?: { thumbnails: Record<string, import('../types/slides').Slide | null> };
+    };
+    const raw = json.data?.thumbnails ?? {};
+
+    // Filter out nulls and cast to Slide
+    const result: Record<string, import('../types/slides').Slide> = {};
+    for (const [stageId, slide] of Object.entries(raw)) {
+      if (slide && typeof slide === 'object') {
+        result[stageId] = slide as import('../types/slides').Slide;
+      }
+    }
+    return result;
   } catch (error) {
     log.error('Failed to load thumbnails:', error);
+    return {};
   }
-  return result;
 }
 
 /**

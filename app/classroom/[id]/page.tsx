@@ -14,6 +14,7 @@ import { createLogger } from '@/lib/logger';
 import { MediaStageProvider } from '@/lib/contexts/media-stage-context';
 import { generateMediaForOutlines } from '@/lib/media/media-orchestrator';
 import { migrateLocalAudioToR2 } from '@/lib/audio/migrate-local-audio-to-r2';
+import { preloadAudio } from '@/lib/utils/audio-player';
 
 const log = createLogger('Classroom');
 
@@ -121,106 +122,112 @@ export default function ClassroomDetailPage() {
       }, LOAD_TIMEOUT_MS);
 
       try {
-        // ── Step 1: Local / shared storage ───────────────────────────────
+        // ── Step 1: Local / shared storage (must run first to know if server fallback needed) ──
         updateStep('local_storage', 'running');
         await loadFromStorage(classroomId);
         if (abort.signal.aborted) return;
 
-        if (!useStageStore.getState().stage) {
-          updateStep('local_storage', 'warn', '本地无数据，尝试服务端');
-        } else {
+        const hasLocalData = !!useStageStore.getState().stage;
+        if (hasLocalData) {
           updateStep('local_storage', 'ok');
-        }
-
-        // ── Step 2: Server-side fallback ──────────────────────────────────
-        if (!useStageStore.getState().stage) {
-          updateStep('server_storage', 'running');
-          try {
-            const res = await fetch(`/api/classroom?id=${encodeURIComponent(classroomId)}`, {
-              signal: abort.signal,
-            });
-            if (abort.signal.aborted) return;
-            if (res.ok) {
-              const json = await res.json();
-              if (json.success && json.classroom) {
-                const { stage, scenes } = json.classroom;
-                useStageStore.getState().setStage(stage);
-                useStageStore.setState({
-                  scenes,
-                  currentSceneId: scenes[0]?.id ?? null,
-                  generatingOutlines: [],
-                  failedOutlines: [],
-                  outlines: [],
-                });
-                updateStep('server_storage', 'ok');
-                log.info('Loaded from server-side storage:', classroomId);
-              } else {
-                updateStep('server_storage', 'warn', '服务端无此课堂数据');
-              }
-            } else {
-              updateStep('server_storage', 'warn', `HTTP ${res.status}`);
-            }
-          } catch (fetchErr) {
-            if (abort.signal.aborted) return;
-            const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
-            updateStep('server_storage', 'warn', `请求失败: ${msg}`);
-            log.warn('Server-side storage fetch failed:', fetchErr);
-          }
-        } else {
           updateStep('server_storage', 'ok', '跳过（本地已有数据）');
+        } else {
+          updateStep('local_storage', 'warn', '本地无数据，尝试服务端');
         }
 
-        if (abort.signal.aborted) return;
+        // ── Steps 2 + 3 + 4: All parallel once step 1 is done ───────────────────────────
+        const serverPromise = hasLocalData
+          ? Promise.resolve()
+          : (async () => {
+              updateStep('server_storage', 'running');
+              try {
+                const res = await fetch(`/api/classroom?id=${encodeURIComponent(classroomId)}`, {
+                  signal: abort.signal,
+                });
+                if (abort.signal.aborted) return;
+                if (res.ok) {
+                  const json = await res.json();
+                  if (json.success && json.classroom) {
+                    const { stage, scenes } = json.classroom;
+                    useStageStore.getState().setStage(stage);
+                    useStageStore.setState({
+                      scenes,
+                      currentSceneId: scenes[0]?.id ?? null,
+                      generatingOutlines: [],
+                      failedOutlines: [],
+                      outlines: [],
+                    });
+                    updateStep('server_storage', 'ok');
+                    log.info('Loaded from server-side storage:', classroomId);
+                  } else {
+                    updateStep('server_storage', 'warn', '服务端无此课堂数据');
+                  }
+                } else {
+                  updateStep('server_storage', 'warn', `HTTP ${res.status}`);
+                }
+              } catch (fetchErr) {
+                if (abort.signal.aborted) return;
+                const msg = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
+                updateStep('server_storage', 'warn', `请求失败: ${msg}`);
+                log.warn('Server-side storage fetch failed:', fetchErr);
+              }
+            })();
 
-        // ── Step 3: Media tasks ────────────────────────────────────────────
-        updateStep('media_tasks', 'running');
-        try {
-          await useMediaGenerationStore.getState().restoreFromDB(classroomId);
-          if (abort.signal.aborted) return;
-          updateStep('media_tasks', 'ok');
-        } catch (mediaErr) {
-          if (abort.signal.aborted) return;
-          const msg = mediaErr instanceof Error ? mediaErr.message : String(mediaErr);
-          updateStep('media_tasks', 'warn', `媒体任务恢复失败: ${msg}`);
-          log.warn('Media tasks restore failed:', mediaErr);
-        }
-
-        // ── Step 4: Agent registry ─────────────────────────────────────────
-        updateStep('agent_registry', 'running');
-        try {
-          const { loadGeneratedAgentsForStage, useAgentRegistry } =
-            await import('@/lib/orchestration/registry/store');
-          if (abort.signal.aborted) return;
-          const generatedAgentIds = await loadGeneratedAgentsForStage(classroomId);
-          if (abort.signal.aborted) return;
-          const { useSettingsStore } = await import('@/lib/store/settings');
-          if (generatedAgentIds.length > 0) {
-            useSettingsStore.getState().setAgentMode('auto');
-            useSettingsStore.getState().setSelectedAgentIds(generatedAgentIds);
-          } else {
-            const stage = useStageStore.getState().stage;
-            const stageAgentIds = stage?.agentIds;
-            const registry = useAgentRegistry.getState();
-            const cleanIds = stageAgentIds?.filter((id) => {
-              const a = registry.getAgent(id);
-              return a && !a.isGenerated;
-            });
-            useSettingsStore.getState().setAgentMode('preset');
-            useSettingsStore
-              .getState()
-              .setSelectedAgentIds(
-                cleanIds && cleanIds.length > 0
-                  ? cleanIds
-                  : ['default-1', 'default-2', 'default-3'],
-              );
+        const mediaPromise = (async () => {
+          updateStep('media_tasks', 'running');
+          try {
+            await useMediaGenerationStore.getState().restoreFromDB(classroomId);
+            if (abort.signal.aborted) return;
+            updateStep('media_tasks', 'ok');
+          } catch (mediaErr) {
+            if (abort.signal.aborted) return;
+            const msg = mediaErr instanceof Error ? mediaErr.message : String(mediaErr);
+            updateStep('media_tasks', 'warn', `媒体任务恢复失败: ${msg}`);
+            log.warn('Media tasks restore failed:', mediaErr);
           }
-          updateStep('agent_registry', 'ok');
-        } catch (agentErr) {
-          if (abort.signal.aborted) return;
-          const msg = agentErr instanceof Error ? agentErr.message : String(agentErr);
-          updateStep('agent_registry', 'error', `Agent 加载失败: ${msg}`);
-          throw agentErr; // escalate — agents are required
-        }
+        })();
+
+        const agentPromise = (async () => {
+          updateStep('agent_registry', 'running');
+          try {
+            const { loadGeneratedAgentsForStage, useAgentRegistry } =
+              await import('@/lib/orchestration/registry/store');
+            if (abort.signal.aborted) return;
+            const generatedAgentIds = await loadGeneratedAgentsForStage(classroomId);
+            if (abort.signal.aborted) return;
+            const { useSettingsStore: useSettingsStoreAgents } =
+              await import('@/lib/store/settings');
+            if (generatedAgentIds.length > 0) {
+              useSettingsStoreAgents.getState().setAgentMode('auto');
+              useSettingsStoreAgents.getState().setSelectedAgentIds(generatedAgentIds);
+            } else {
+              const stage = useStageStore.getState().stage;
+              const stageAgentIds = stage?.agentIds;
+              const registry = useAgentRegistry.getState();
+              const cleanIds = stageAgentIds?.filter((id) => {
+                const a = registry.getAgent(id);
+                return a && !a.isGenerated;
+              });
+              useSettingsStoreAgents.getState().setAgentMode('preset');
+              useSettingsStoreAgents
+                .getState()
+                .setSelectedAgentIds(
+                  cleanIds && cleanIds.length > 0
+                    ? cleanIds
+                    : ['default-1', 'default-2', 'default-3'],
+                );
+            }
+            updateStep('agent_registry', 'ok');
+          } catch (agentErr) {
+            if (abort.signal.aborted) return;
+            const msg = agentErr instanceof Error ? agentErr.message : String(agentErr);
+            updateStep('agent_registry', 'error', `Agent 加载失败: ${msg}`);
+            throw agentErr;
+          }
+        })();
+
+        // Await all three in parallel
+        await Promise.all([serverPromise, mediaPromise, agentPromise]);
 
         if (abort.signal.aborted) return;
 
@@ -321,6 +328,31 @@ export default function ClassroomDetailPage() {
       });
     }
   }, [loading, error, generateRemaining]);
+
+  // ── Audio preloading: collect all audioIds from scenes and prefetch in background ──
+  useEffect(() => {
+    if (loading || error) return;
+    if (typeof window === 'undefined') return;
+
+    const { scenes } = useStageStore.getState();
+    if (!scenes.length) return;
+
+    // Extract audioIds from speech actions across all scenes
+    const audioIds = new Set<string>();
+    for (const scene of scenes) {
+      for (const action of scene.actions ?? []) {
+        if (action.type === 'speech' && action.audioId) {
+          audioIds.add(action.audioId);
+        }
+      }
+    }
+
+    if (audioIds.size === 0) return;
+
+    // Fire-and-forget: preload in background, up to 4 concurrent fetches
+    preloadAudio([...audioIds]);
+    log.info(`[Classroom] Preloading ${audioIds.size} audio files`);
+  }, [loading, error]);
 
   // Auto-migrate legacy local-only TTS audio to R2 in the background once the classroom is ready.
   useEffect(() => {

@@ -19,6 +19,93 @@ const log = createLogger('AudioPlayer');
 
 let sharedContext: AudioContext | null = null;
 
+// ─── Audio Buffer Cache (in-memory, for preloading) ──────────────────────────
+
+interface CachedBuffer {
+  buffer: AudioBuffer;
+  fetchedAt: number;
+}
+
+/** In-memory cache: audioId → decoded AudioBuffer
+ *  Keeps up to 20 entries (≈ 20 × 1 MB = 20 MB max). */
+const audioCache = new Map<string, CachedBuffer>();
+const MAX_CACHE_ENTRIES = 20;
+
+function cacheAudioBuffer(audioId: string, buffer: AudioBuffer): void {
+  if (audioCache.size >= MAX_CACHE_ENTRIES) {
+    // Evict oldest
+    let oldestKey: string | null = null;
+    let oldestTime = Infinity;
+    for (const [k, v] of audioCache) {
+      if (v.fetchedAt < oldestTime) {
+        oldestTime = v.fetchedAt;
+        oldestKey = k;
+      }
+    }
+    if (oldestKey) audioCache.delete(oldestKey);
+  }
+  audioCache.set(audioId, { buffer, fetchedAt: Date.now() });
+}
+
+function getCachedBuffer(audioId: string): AudioBuffer | null {
+  return audioCache.get(audioId)?.buffer ?? null;
+}
+
+/** Fetch + decode a single audioId and store in cache. Returns the buffer (or null). */
+async function fetchAndDecode(audioId: string): Promise<AudioBuffer | null> {
+  const cached = getCachedBuffer(audioId);
+  if (cached) return cached;
+
+  const record = await db.audioFiles.get(audioId).catch(() => undefined);
+  if (!record?.ossKey) return null;
+
+  let bytes: ArrayBuffer;
+  try {
+    bytes = await fetchAudioBytes(record.ossKey);
+  } catch {
+    return null;
+  }
+
+  const ctx = getAudioContext();
+  if (!ctx) return null;
+
+  try {
+    const buffer = await ctx.decodeAudioData(bytes.slice(0));
+    cacheAudioBuffer(audioId, buffer);
+    return buffer;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Preload multiple audio files in parallel.
+ * Call this after a classroom loads so the audio is ready before user clicks play.
+ *
+ * @param audioIds  Array of audioId strings to prefetch. Duplicates are ignored.
+ * @param concurrency  Max simultaneous fetches. Default 4 (avoids overwhelming the connection).
+ */
+export function preloadAudio(audioIds: string[], concurrency = 4): void {
+  const unique = [...new Set(audioIds.filter(Boolean))];
+  if (unique.length === 0) return;
+
+  // Kick off at most `concurrency` fetches in parallel; rest are fire-and-forget.
+  const queue = [...unique];
+  const workers: Promise<void>[] = [];
+
+  const worker = async () => {
+    while (queue.length > 0) {
+      const id = queue.shift()!;
+      // Fire-and-forget: errors are swallowed; cache handles misses silently.
+      await fetchAndDecode(id).catch(() => {});
+    }
+  };
+
+  for (let i = 0; i < Math.min(concurrency, unique.length); i++) {
+    workers.push(worker());
+  }
+}
+
 export function getAudioContext(): AudioContext | null {
   if (typeof window === 'undefined') return null;
   if (!sharedContext || sharedContext.state === 'closed') {
@@ -182,6 +269,13 @@ export class AudioPlayer {
       // ── Try Web Audio API path ──────────────────────────────────────────────
       if (ctx) {
         let bytes: ArrayBuffer | null = null;
+
+        // 0. Check in-memory buffer cache (instant, no network)
+        const cached = getCachedBuffer(audioId);
+        if (cached) {
+          this.startBuffer(cached);
+          return true;
+        }
 
         // Priority 1: Pre-generated audio URL from R2 (audioId via IndexedDB lookup)
         // This handles all pre-generated lecture audio stored in R2.

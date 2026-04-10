@@ -228,40 +228,69 @@ export async function generateTTSForClassroom(
   const voice = DEFAULT_TTS_VOICES[providerId] || 'default';
   const format = TTS_PROVIDERS[providerId]?.supportedFormats?.[0] || 'mp3';
 
+  // Collect all speech actions and their audio IDs upfront
+  type SpeechTask = {
+    scene: Scene;
+    action: SpeechAction;
+    audioId: string;
+    filename: string;
+  };
+  const tasks: SpeechTask[] = [];
+
   for (const scene of scenes) {
     if (!scene.actions) continue;
-
-    // Split long speech actions into multiple shorter ones before TTS generation,
-    // mirroring the client-side approach. Each sub-action gets its own audio file.
     scene.actions = splitLongSpeechActions(scene.actions, providerId);
-
     for (const action of scene.actions) {
-      if (action.type !== 'speech' || !(action as SpeechAction).text) continue;
+      if (action.type !== 'speech' && action.type !== 'narrate') continue;
       const speechAction = action as SpeechAction;
+      if (!speechAction.text) continue;
       const audioId = `tts_${action.id}`;
-
-      try {
-        const result = await generateTTS(
-          {
-            providerId,
-            modelId: DEFAULT_TTS_MODELS[providerId] || '',
-            apiKey,
-            baseUrl: ttsBaseUrl,
-            voice,
-            speed: speechAction.speed,
-          },
-          speechAction.text,
-        );
-
-        const filename = `${audioId}.${format}`;
-        await fs.writeFile(path.join(audioDir, filename), result.audio);
-
-        speechAction.audioId = audioId;
-        speechAction.audioUrl = mediaServingUrl(baseUrl, classroomId, `audio/${filename}`);
-        log.info(`Generated TTS: ${filename} (${result.audio.length} bytes)`);
-      } catch (err) {
-        log.warn(`TTS generation failed for action ${action.id}:`, err);
-      }
+      const filename = `${audioId}.${format}`;
+      tasks.push({ scene, action: speechAction, audioId, filename });
     }
   }
+
+  if (tasks.length === 0) {
+    log.info('No speech actions found, skipping TTS generation');
+    return;
+  }
+
+  // Run all TTS requests in parallel (Promise.allSettled to isolate failures)
+  const CONCURRENCY = 4;
+  const results = await Promise.allSettled(
+    tasks.slice(0, 200).map((task) =>
+      generateTTS(
+        {
+          providerId,
+          modelId: DEFAULT_TTS_MODELS[providerId] || '',
+          apiKey,
+          baseUrl: ttsBaseUrl,
+          voice,
+          speed: task.action.speed,
+        },
+        task.action.text,
+      ).then((result) => ({ task, result })),
+    ),
+  );
+
+  // Write audio files sequentially (sequential I/O is fine)
+  let successCount = 0;
+  for (const settled of results) {
+    if (settled.status !== 'fulfilled') {
+      const task = tasks[results.indexOf(settled)];
+      log.warn(`TTS generation failed for action ${task?.action.id}:`, settled.reason);
+      continue;
+    }
+    const { task, result } = settled.value;
+    try {
+      await fs.writeFile(path.join(audioDir, task.filename), result.audio);
+      task.action.audioId = task.audioId;
+      task.action.audioUrl = mediaServingUrl(baseUrl, classroomId, `audio/${task.filename}`);
+      successCount++;
+    } catch (writeErr) {
+      log.warn(`TTS write failed for ${task.filename}:`, writeErr);
+    }
+  }
+
+  log.info(`TTS generation complete: ${successCount}/${tasks.length} succeeded`);
 }
