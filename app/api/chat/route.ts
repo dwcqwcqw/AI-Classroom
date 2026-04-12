@@ -21,8 +21,8 @@ import { createLogger } from '@/lib/logger';
 import { resolveModel } from '@/lib/server/resolve-model';
 const log = createLogger('Chat API');
 
-// Allow streaming responses up to 180 seconds (covers multi-turn LLM calls with thinking/reasoning)
-export const maxDuration = 180;
+// Allow streaming responses up to 60 seconds
+export const maxDuration = 60;
 
 /**
  * POST /api/chat

@@ -73,8 +73,6 @@ export default function ClassroomDetailPage() {
   const [steps, setSteps] = useState<Record<LoadStep, StepStatus>>(makeSteps);
   const [timedOut, setTimedOut] = useState(false);
   const [audioPreloadProgress, setAudioPreloadProgress] = useState({ loaded: 0, total: 0 });
-  // Tab 切换回来时递增，触发 auto-resume effect 重新检查生成状态
-  const [visibilityResumeTrigger, setVisibilityResumeTrigger] = useState(0);
 
   const generationStartedRef = useRef(false);
   const audioMigrationStartedRef = useRef(false);
@@ -317,67 +315,24 @@ export default function ClassroomDetailPage() {
 
     loadClassroom(0);
 
-    // 在页面卸载 / Tab 切换到后台时，保存生成进度到 sessionStorage，
-    // 以便在用户返回页面时自动恢复生成（而不是中断后丢失进度）。
-    // 注意：不再调用 stop()，因为它会 bumpGenerationEpoch() 导致无法恢复。
-    // 仅取消 fetch 请求，generationEpoch 保持不变。
-    // 恢复逻辑统一由下面的 auto-resume useEffect 处理。
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === 'hidden') {
-        // 标记"用户离开时正在生成"，auto-resume effect 检测到此标记后会恢复
-        const state = useStageStore.getState();
-        if (state.generationStatus === 'generating') {
-          sessionStorage.setItem(
-            'generation:wasGenerating',
-            JSON.stringify({ stageId: classroomId, ts: Date.now() }),
-          );
-        }
-      } else {
-        // Tab 重新激活时，清除标记，并触发 auto-resume effect 重新检查
-        sessionStorage.removeItem('generation:wasGenerating');
-        setVisibilityResumeTrigger((n) => n + 1);
-      }
-    };
-
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
     return () => {
-      // 不再调用 stop()，避免 bumpGenerationEpoch() 导致无法恢复
+      stop();
       loadAbortRef.current?.abort('unmount');
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [classroomId, loadClassroom, generateRemaining, setSidebarCollapsed, setChatAreaCollapsed]);
+  }, [classroomId, loadClassroom, stop, setSidebarCollapsed, setChatAreaCollapsed]);
 
   // Auto-resume generation for pending outlines
-  // 触发条件：
-  // 1. 首次加载且有未完成的生成任务
-  // 2. Tab 切换回来（visibilityResumeTrigger 变化）且之前正在生成（sessionStorage 标记）
   useEffect(() => {
-    // 首次加载：已有生成任务（generationStartedRef = false 且有待处理 outlines）
-    // Tab 恢复：之前在生成（sessionStorage:wasGenerating）且有待处理 outlines
-    const wasGeneratingBefore =
-      sessionStorage.getItem('generation:wasGenerating') !== null;
+    if (loading || error || generationStartedRef.current) return;
+
     const state = useStageStore.getState();
     const { outlines, scenes, stage } = state;
 
     const completedOrders = new Set(scenes.map((s) => s.order));
     const hasPending = outlines.some((o) => !completedOrders.has(o.order));
 
-    // 清除 sessionStorage 标记
-    sessionStorage.removeItem('generation:wasGenerating');
-
-    if (!hasPending || !stage) return;
-
-    // 首次挂载时，有待处理 outlines → 直接启动生成
-    // Tab 恢复时（wasGeneratingBefore=true），有 pending 且未在生成中 → 恢复
-    const isFirstMount = !generationStartedRef.current;
-    const isVisibilityResume =
-      visibilityResumeTrigger > 0 &&
-      wasGeneratingBefore &&
-      state.generationStatus !== 'generating';
-
-    if (isFirstMount || isVisibilityResume) {
+    if (hasPending && stage) {
       generationStartedRef.current = true;
 
       const genParamsStr = sessionStorage.getItem('generationParams');
@@ -407,7 +362,7 @@ export default function ClassroomDetailPage() {
         log.warn('[Classroom] Media generation resume error:', err);
       });
     }
-  }, [loading, error, generateRemaining, visibilityResumeTrigger]);
+  }, [loading, error, generateRemaining]);
 
   // ── Audio preloading (fallback): if scenes change after initial load (e.g. resume) ──
   useEffect(() => {
