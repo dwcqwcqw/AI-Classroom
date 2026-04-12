@@ -37,31 +37,60 @@ export async function GET(request: Request) {
       .bind(...stageIds)
       .all<{ id: string; stage_json: string; scenes_json: string }>();
 
+    log.info(`[thumbnails] Query returned ${results?.length ?? 0} rows for ${stageIds.length} requested stageIds`);
+
     const thumbnails: Record<string, object | null> = {};
 
     for (const stageId of stageIds) {
       const row = results?.find((r) => r.id === stageId);
       if (!row) {
+        log.warn(`[thumbnails] Stage not found in D1: ${stageId}`);
         thumbnails[stageId] = null;
         continue;
       }
 
+      // Fallback: try stage_json if scenes_json is empty/invalid
       let storeData: object | null = null;
-      try {
-        const parsed = JSON.parse(row.scenes_json);
-        storeData = parsed;
-      } catch {
+      const scenesJsonRaw = row.scenes_json;
+      if (scenesJsonRaw && scenesJsonRaw.trim() !== '') {
+        try {
+          storeData = JSON.parse(scenesJsonRaw);
+        } catch {
+          log.warn(`[thumbnails] Failed to parse scenes_json for stage ${stageId}, trying stage_json`);
+        }
+      }
+
+      // If scenes_json failed, try extracting scenes from stage_json
+      if (!storeData) {
+        try {
+          const stageJsonParsed = JSON.parse(row.stage_json);
+          // The stage object may have a scenes field directly
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          if (stageJsonParsed && typeof stageJsonParsed === 'object' && 'scenes' in stageJsonParsed) {
+            storeData = { scenes: (stageJsonParsed as any).scenes };
+            log.info(`[thumbnails] Recovered scenes from stage_json for stage ${stageId}`);
+          }
+        } catch {
+          log.warn(`[thumbnails] Also failed to parse stage_json for stage ${stageId}`);
+        }
+      }
+
+      if (!storeData) {
         thumbnails[stageId] = null;
         continue;
       }
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const scenes = (storeData as any)?.scenes ?? [];
+      if (scenes.length === 0) {
+        log.warn(`[thumbnails] Stage ${stageId} has 0 scenes in scenes_json`);
+      }
       const firstSlide = scenes.find(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (s: any) => s.content?.type === 'slide',
       );
       if (!firstSlide) {
+        log.warn(`[thumbnails] Stage ${stageId} has no slide scene`);
         thumbnails[stageId] = null;
         continue;
       }
