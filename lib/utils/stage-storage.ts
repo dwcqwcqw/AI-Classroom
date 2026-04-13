@@ -7,6 +7,7 @@
 
 import { Stage, Scene, type SceneRefineSession } from '../types/stage';
 import { ChatSession } from '../types/chat';
+import type { SceneOutline } from '@/lib/types/generation';
 import { db } from './database';
 import { deleteChatSessions } from './chat-storage';
 import { clearPlaybackState } from './playback-storage';
@@ -20,6 +21,7 @@ export interface StageStoreData {
   currentSceneId: string | null;
   chats: ChatSession[];
   refineSessions?: Record<string, SceneRefineSession>;
+  outlines?: SceneOutline[];
   /** Persisted on shared_stages; optional for backward-compatible payloads */
   isStarred?: boolean;
 }

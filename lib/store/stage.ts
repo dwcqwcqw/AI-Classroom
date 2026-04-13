@@ -539,7 +539,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
 
   // Storage methods
   saveToStorage: async () => {
-    const { stage, scenes, currentSceneId, chats, refineSessions } = get();
+    const { stage, scenes, currentSceneId, chats, refineSessions, outlines } = get();
     if (!stage?.id) {
       log.warn('Cannot save: stage.id is required');
       return;
@@ -559,6 +559,7 @@ const useStageStoreBase = create<StageState>()((set, get) => ({
         chats,
         refineSessions,
         isStarred,
+        outlines,
       });
     } catch (error) {
       log.error('Failed to save to storage:', error);

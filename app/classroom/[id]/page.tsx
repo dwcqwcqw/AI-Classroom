@@ -159,7 +159,7 @@ export default function ClassroomDetailPage() {
                       currentSceneId: scenes[0]?.id ?? null,
                       generatingOutlines: [],
                       failedOutlines: [],
-                      outlines: [],
+                      // outlines 从 loadFromStorage 已经加载，这里不再覆盖
                     });
                     updateStep('server_storage', 'ok');
                     log.info('Loaded from server-side storage:', classroomId);
