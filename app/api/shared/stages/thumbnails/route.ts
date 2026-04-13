@@ -53,10 +53,10 @@ export async function GET(request: Request) {
 
       let scenes: object[] = [];
       try {
-        const parsed = JSON.parse(row.scenes_json);
+        const parsed = JSON.parse(row.scenes_json || '[]');
         // scenes_json 可以是数组或 { scenes: [...] } 两种格式
         scenes = Array.isArray(parsed) ? parsed : (parsed?.scenes ?? []);
-        log.info(`[thumbnails] stage ${stageId}: parsed ${scenes.length} scenes`);
+        log.info(`[thumbnails] stage ${stageId}: parsed ${scenes.length} scenes, raw: ${row.scenes_json?.slice(0, 100)}`);
       } catch (e) {
         log.error(`[thumbnails] Failed to parse scenes_json for stage ${stageId}:`, e);
         thumbnails[stageId] = null;
@@ -67,10 +67,11 @@ export async function GET(request: Request) {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const firstSlide = (scenes as any[]).find(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (s: any) => s.content?.type === 'slide',
+        (s: any) => s?.content?.type === 'slide',
       );
       if (!firstSlide) {
-        log.warn(`[thumbnails] No slide scene found for stage ${stageId} (first 3 scenes: ${(scenes as any[]).slice(0, 3).map((s: any) => s.content?.type).join(', ')})`);
+        const sceneTypes = (scenes as any[]).map((s: any) => s?.content?.type ?? 'unknown').slice(0, 5);
+        log.warn(`[thumbnails] No slide scene found for stage ${stageId} (scenes: ${scenes.length}, types: ${sceneTypes.join(', ')})`);
         thumbnails[stageId] = null;
         continue;
       }
