@@ -95,23 +95,27 @@ function GenerationPreviewContent() {
     const settings = useSettingsStore.getState();
     const imageProviderConfig = settings.imageProvidersConfig?.[settings.imageProviderId];
     const videoProviderConfig = settings.videoProvidersConfig?.[settings.videoProviderId];
+    // Filter header values to only contain valid ISO-8859-1 characters
+    // to avoid "Failed to read the 'headers' property from 'RequestInit': 
+    // String contains non ISO-8859-1 code point" errors
+    const filterHeader = (v: string) => v.replace(/[^\x20-\x7E]/g, '').slice(0, 500);
     return {
       'Content-Type': 'application/json',
-      'x-model': modelConfig.modelString,
-      'x-api-key': modelConfig.apiKey,
-      'x-base-url': modelConfig.baseUrl,
-      'x-provider-type': modelConfig.providerType || '',
+      'x-model': filterHeader(modelConfig.modelString),
+      'x-api-key': filterHeader(modelConfig.apiKey),
+      'x-base-url': filterHeader(modelConfig.baseUrl),
+      'x-provider-type': filterHeader(modelConfig.providerType || ''),
       'x-requires-api-key': modelConfig.requiresApiKey ? 'true' : 'false',
       // Image generation provider
-      'x-image-provider': settings.imageProviderId || '',
-      'x-image-model': settings.imageModelId || '',
-      'x-image-api-key': imageProviderConfig?.apiKey || '',
-      'x-image-base-url': imageProviderConfig?.baseUrl || '',
+      'x-image-provider': filterHeader(settings.imageProviderId || ''),
+      'x-image-model': filterHeader(settings.imageModelId || ''),
+      'x-image-api-key': filterHeader(imageProviderConfig?.apiKey || ''),
+      'x-image-base-url': filterHeader(imageProviderConfig?.baseUrl || ''),
       // Video generation provider
-      'x-video-provider': settings.videoProviderId || '',
-      'x-video-model': settings.videoModelId || '',
-      'x-video-api-key': videoProviderConfig?.apiKey || '',
-      'x-video-base-url': videoProviderConfig?.baseUrl || '',
+      'x-video-provider': filterHeader(settings.videoProviderId || ''),
+      'x-video-model': filterHeader(settings.videoModelId || ''),
+      'x-video-api-key': filterHeader(videoProviderConfig?.apiKey || ''),
+      'x-video-base-url': filterHeader(videoProviderConfig?.baseUrl || ''),
       // Media generation toggles
       'x-image-generation-enabled': String(settings.imageGenerationEnabled ?? false),
       'x-video-generation-enabled': String(settings.videoGenerationEnabled ?? false),
