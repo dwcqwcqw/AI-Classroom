@@ -22,3 +22,18 @@ database_id = "d1f70870-c5f6-4e0c-83a0-3dac874a282b"
 [[r2_buckets]]
 binding = "FILES"
 bucket_name = "ai-classroom-files"
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1
