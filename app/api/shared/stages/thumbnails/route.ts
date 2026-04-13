@@ -46,18 +46,19 @@ export async function GET(request: Request) {
         continue;
       }
 
-      let storeData: object | null = null;
+      let scenes: object[] = [];
       try {
         const parsed = JSON.parse(row.scenes_json);
-        storeData = parsed;
+        // scenes_json 可以是数组或 { scenes: [...] } 两种格式
+        scenes = Array.isArray(parsed) ? parsed : (parsed?.scenes ?? []);
       } catch {
         thumbnails[stageId] = null;
         continue;
       }
 
+      // Find first slide-type scene (scenes can be array or { scenes: [...] })
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const scenes = (storeData as any)?.scenes ?? [];
-      const firstSlide = scenes.find(
+      const firstSlide = (scenes as any[]).find(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         (s: any) => s.content?.type === 'slide',
       );
