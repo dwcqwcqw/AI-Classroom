@@ -183,9 +183,11 @@ export async function getFirstSlideByStages(
 
     const json = (await res.json()) as {
       success: boolean;
+      thumbnails?: Record<string, import('../types/slides').Slide | null>;
       data?: { thumbnails: Record<string, import('../types/slides').Slide | null> };
     };
-    const raw = json.data?.thumbnails ?? {};
+    // Support both response formats: { thumbnails } or { data: { thumbnails } }
+    const raw = json.thumbnails ?? json.data?.thumbnails ?? {};
 
     // Filter out nulls and cast to Slide
     const result: Record<string, import('../types/slides').Slide> = {};
