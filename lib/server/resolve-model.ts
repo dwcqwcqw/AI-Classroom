@@ -59,15 +59,28 @@ export function resolveModel(params: {
 }
 
 /**
+ * Decode a Base64-encoded header value that may contain non-ISO-8859-1 characters.
+ */
+function decodeHeaderValue(value: string | null): string | undefined {
+  if (!value) return undefined;
+  try {
+    return decodeURIComponent(escape(atob(value)));
+  } catch {
+    return value;
+  }
+}
+
+/**
  * Resolve a language model from standard request headers.
  *
  * Reads: x-model, x-api-key, x-base-url, x-provider-type, x-requires-api-key
+ * Note: x-model, x-api-key, x-base-url are Base64-encoded to support non-ISO-8859-1 characters
  */
 export function resolveModelFromHeaders(req: NextRequest): ResolvedModel {
   return resolveModel({
-    modelString: req.headers.get('x-model') || undefined,
-    apiKey: req.headers.get('x-api-key') || undefined,
-    baseUrl: req.headers.get('x-base-url') || undefined,
+    modelString: decodeHeaderValue(req.headers.get('x-model')),
+    apiKey: decodeHeaderValue(req.headers.get('x-api-key')),
+    baseUrl: decodeHeaderValue(req.headers.get('x-base-url')),
     providerType: req.headers.get('x-provider-type') || undefined,
     requiresApiKey: req.headers.get('x-requires-api-key') === 'true' ? true : undefined,
   });

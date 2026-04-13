@@ -24,12 +24,22 @@ import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
 
 const log = createLogger('VerifyImageProvider');
 
+// Base64 decode helper for headers that may contain non-ISO-8859-1 characters
+const decodeHeaderValue = (value: string | null): string | undefined => {
+  if (!value) return undefined;
+  try {
+    return decodeURIComponent(escape(atob(value)));
+  } catch {
+    return value;
+  }
+};
+
 export async function POST(request: NextRequest) {
   try {
-    const providerId = (request.headers.get('x-image-provider') || 'seedream') as ImageProviderId;
-    const model = request.headers.get('x-image-model') || undefined;
-    const clientApiKey = request.headers.get('x-api-key') || undefined;
-    const clientBaseUrl = request.headers.get('x-base-url') || undefined;
+    const providerId = (decodeHeaderValue(request.headers.get('x-image-provider')) || 'seedream') as ImageProviderId;
+    const model = decodeHeaderValue(request.headers.get('x-image-model'));
+    const clientApiKey = decodeHeaderValue(request.headers.get('x-api-key'));
+    const clientBaseUrl = decodeHeaderValue(request.headers.get('x-base-url'));
 
     if (clientBaseUrl && process.env.NODE_ENV === 'production') {
       const ssrfError = validateUrlForSSRF(clientBaseUrl);

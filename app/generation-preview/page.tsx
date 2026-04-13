@@ -95,27 +95,32 @@ function GenerationPreviewContent() {
     const settings = useSettingsStore.getState();
     const imageProviderConfig = settings.imageProvidersConfig?.[settings.imageProviderId];
     const videoProviderConfig = settings.videoProvidersConfig?.[settings.videoProviderId];
-    // Filter header values to only contain valid ISO-8859-1 characters
-    // to avoid "Failed to read the 'headers' property from 'RequestInit': 
-    // String contains non ISO-8859-1 code point" errors
-    const filterHeader = (v: string) => v.replace(/[^\x20-\x7E]/g, '').slice(0, 500);
+    // Base64 encode header values that may contain non-ISO-8859-1 characters (e.g. Chinese in model names)
+    // Server will decode these headers to recover the original values
+    const encodeHeader = (v: string) => {
+      try {
+        return btoa(unescape(encodeURIComponent(v)));
+      } catch {
+        return v.replace(/[^\x20-\x7E]/g, '');
+      }
+    };
     return {
       'Content-Type': 'application/json',
-      'x-model': filterHeader(modelConfig.modelString),
-      'x-api-key': filterHeader(modelConfig.apiKey),
-      'x-base-url': filterHeader(modelConfig.baseUrl),
-      'x-provider-type': filterHeader(modelConfig.providerType || ''),
+      'x-model': encodeHeader(modelConfig.modelString),
+      'x-api-key': encodeHeader(modelConfig.apiKey),
+      'x-base-url': encodeHeader(modelConfig.baseUrl),
+      'x-provider-type': modelConfig.providerType || '',
       'x-requires-api-key': modelConfig.requiresApiKey ? 'true' : 'false',
       // Image generation provider
-      'x-image-provider': filterHeader(settings.imageProviderId || ''),
-      'x-image-model': filterHeader(settings.imageModelId || ''),
-      'x-image-api-key': filterHeader(imageProviderConfig?.apiKey || ''),
-      'x-image-base-url': filterHeader(imageProviderConfig?.baseUrl || ''),
+      'x-image-provider': encodeHeader(settings.imageProviderId || ''),
+      'x-image-model': encodeHeader(settings.imageModelId || ''),
+      'x-image-api-key': encodeHeader(imageProviderConfig?.apiKey || ''),
+      'x-image-base-url': encodeHeader(imageProviderConfig?.baseUrl || ''),
       // Video generation provider
-      'x-video-provider': filterHeader(settings.videoProviderId || ''),
-      'x-video-model': filterHeader(settings.videoModelId || ''),
-      'x-video-api-key': filterHeader(videoProviderConfig?.apiKey || ''),
-      'x-video-base-url': filterHeader(videoProviderConfig?.baseUrl || ''),
+      'x-video-provider': encodeHeader(settings.videoProviderId || ''),
+      'x-video-model': encodeHeader(settings.videoModelId || ''),
+      'x-video-api-key': encodeHeader(videoProviderConfig?.apiKey || ''),
+      'x-video-base-url': encodeHeader(videoProviderConfig?.baseUrl || ''),
       // Media generation toggles
       'x-image-generation-enabled': String(settings.imageGenerationEnabled ?? false),
       'x-video-generation-enabled': String(settings.videoGenerationEnabled ?? false),

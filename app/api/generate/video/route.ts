@@ -26,6 +26,16 @@ import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
 
 const log = createLogger('VideoGeneration API');
 
+// Base64 decode helper for headers that may contain non-ISO-8859-1 characters
+const decodeHeaderValue = (value: string | null): string | undefined => {
+  if (!value) return undefined;
+  try {
+    return decodeURIComponent(escape(atob(value)));
+  } catch {
+    return value;
+  }
+};
+
 export const maxDuration = 300;
 
 export async function POST(request: NextRequest) {
@@ -36,10 +46,10 @@ export async function POST(request: NextRequest) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'Missing prompt');
     }
 
-    const providerId = (request.headers.get('x-video-provider') || 'seedance') as VideoProviderId;
-    const clientApiKey = request.headers.get('x-api-key') || undefined;
-    const clientBaseUrl = request.headers.get('x-base-url') || undefined;
-    const clientModel = request.headers.get('x-video-model') || undefined;
+    const providerId = (decodeHeaderValue(request.headers.get('x-video-provider')) || 'seedance') as VideoProviderId;
+    const clientApiKey = decodeHeaderValue(request.headers.get('x-api-key'));
+    const clientBaseUrl = decodeHeaderValue(request.headers.get('x-base-url'));
+    const clientModel = decodeHeaderValue(request.headers.get('x-video-model'));
 
     if (clientBaseUrl && process.env.NODE_ENV === 'production') {
       const ssrfError = validateUrlForSSRF(clientBaseUrl);
