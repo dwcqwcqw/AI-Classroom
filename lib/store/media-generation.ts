@@ -160,6 +160,7 @@ export const useMediaGenerationStore = create<MediaGenerationState>()((set, get)
   restoreFromDB: async (stageId) => {
     try {
       const records = await db.mediaFiles.where('stageId').equals(stageId).toArray();
+      log.info(`[restoreFromDB] Found ${records.length} media records for stage ${stageId}`);
       const restored: Record<string, MediaTask> = {};
       for (const rec of records) {
         // Extract elementId from compound key (stageId:elementId)
@@ -179,6 +180,7 @@ export const useMediaGenerationStore = create<MediaGenerationState>()((set, get)
             retryCount: 0,
             stageId,
           };
+          log.info(`[restoreFromDB] Restored failed: ${elementId}`);
         } else if (rec.ossKey) {
           // Use ossKey as the objectUrl (media stored in R2)
           restored[elementId] = {
@@ -192,10 +194,14 @@ export const useMediaGenerationStore = create<MediaGenerationState>()((set, get)
             retryCount: 0,
             stageId,
           };
+          log.info(`[restoreFromDB] Restored done: ${elementId} -> ${rec.ossKey}`);
+        } else {
+          log.warn(`[restoreFromDB] No ossKey for ${elementId}, skipping`);
         }
       }
       if (Object.keys(restored).length > 0) {
         set((s) => ({ tasks: { ...s.tasks, ...restored } }));
+        log.info(`[restoreFromDB] Updated store with ${Object.keys(restored).length} tasks`);
       }
     } catch (err) {
       log.error('Failed to restore from DB:', err);
