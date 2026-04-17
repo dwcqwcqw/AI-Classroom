@@ -11,6 +11,12 @@ import { useClipImage } from './useClipImage';
 import { useFilter } from './useFilter';
 import { ImageOutline } from './ImageOutline';
 import { ImageClipHandler } from './ImageClipHandler';
+import { useMediaGenerationStore, isMediaPlaceholder } from '@/lib/store/media-generation';
+import { useMediaStageId } from '@/lib/contexts/media-stage-context';
+import { useSettingsStore } from '@/lib/store/settings';
+import { retryMediaTask } from '@/lib/media/media-orchestrator';
+import { ImageOff, RotateCcw, Paintbrush, ShieldAlert } from 'lucide-react';
+import { useI18n } from '@/lib/hooks/use-i18n';
 
 export interface ImageElementProps {
   elementInfo: PPTImageElement;
@@ -21,6 +27,7 @@ export interface ImageElementProps {
  * Image element component with interaction support
  */
 export function ImageElement({ elementInfo, selectElement }: ImageElementProps) {
+  const { t } = useI18n();
   const clipingImageElementId = useCanvasStore.use.clipingImageElementId();
   const setClipingImageElementId = useCanvasStore.use.setClipingImageElementId();
   const { updateElement } = useCanvasOperations();
@@ -30,6 +37,25 @@ export function ImageElement({ elementInfo, selectElement }: ImageElementProps) 
   const { flipStyle } = useElementFlip(elementInfo.flipH, elementInfo.flipV);
   const { clipShape, imgPosition } = useClipImage(elementInfo);
   const { filter } = useFilter(elementInfo.filters);
+
+  // Media placeholder resolution (same as BaseImageElement)
+  const stageId = useMediaStageId();
+  const isPlaceholder = !!stageId && isMediaPlaceholder(elementInfo.src);
+  const task = useMediaGenerationStore((s) => {
+    if (!isPlaceholder) return undefined;
+    const t = s.tasks[elementInfo.src];
+    if (t && t.stageId !== stageId) return undefined;
+    return t;
+  });
+
+  const imageGenerationEnabled = useSettingsStore((s) => s.imageGenerationEnabled);
+  const resolvedSrc = task?.status === 'done' && task.objectUrl ? task.objectUrl : elementInfo.src;
+  const showDisabled = isPlaceholder && !task && !imageGenerationEnabled;
+  const showSkeleton =
+    isPlaceholder &&
+    !showDisabled &&
+    (!task || task.status === 'pending' || task.status === 'generating');
+  const showError = isPlaceholder && task?.status === 'failed';
 
   const isCliping = clipingImageElementId === elementInfo.id;
 
@@ -128,28 +154,72 @@ export function ImageElement({ elementInfo, selectElement }: ImageElementProps) 
               className="image-content w-full h-full overflow-hidden relative"
               style={{ clipPath: clipShape.style }}
             >
-              <img
-                src={elementInfo.src}
-                draggable={false}
-                style={{
-                  position: 'absolute',
-                  top: imgPosition.top,
-                  left: imgPosition.left,
-                  width: imgPosition.width,
-                  height: imgPosition.height,
-                  filter,
-                }}
-                alt=""
-                onDragStart={(e) => e.preventDefault()}
-              />
-              {elementInfo.colorMask && (
-                <div
-                  className="color-mask absolute inset-0"
-                  style={{
-                    backgroundColor: elementInfo.colorMask,
-                  }}
-                />
-              )}
+              {showDisabled ? (
+                <div className="w-full h-full bg-gray-50 dark:bg-gray-900/30 flex items-center justify-center">
+                  <div className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-gray-500 dark:text-gray-400">
+                    <ImageOff className="w-4 h-4 shrink-0" />
+                    <span>{t('settings.mediaGenerationDisabled')}</span>
+                  </div>
+                </div>
+              ) : showSkeleton ? (
+                <div className="w-full h-full bg-gradient-to-br from-amber-50 via-orange-50/60 to-yellow-50 dark:from-amber-950/40 dark:via-orange-950/30 dark:to-yellow-950/20 flex items-center justify-center">
+                  <div className="relative w-12 h-12">
+                    <div className="absolute inset-0 rounded-full border-2 border-amber-300/40 dark:border-amber-500/30 animate-pulse" />
+                    <Paintbrush className="absolute inset-0 m-auto w-5 h-5 text-amber-400/80 dark:text-amber-500/70" strokeWidth={1.5} />
+                  </div>
+                </div>
+              ) : showError ? (
+                <div className="w-full h-full bg-red-50 dark:bg-red-900/20 flex flex-col items-center justify-center gap-2">
+                  {task?.errorCode === 'CONTENT_SENSITIVE' ? (
+                    <div className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-amber-600 dark:text-amber-400">
+                      <ShieldAlert className="w-4 h-4 shrink-0" />
+                      <span>{t('settings.mediaContentSensitive')}</span>
+                    </div>
+                  ) : task?.errorCode === 'GENERATION_DISABLED' ? (
+                    <div className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-gray-500 dark:text-gray-400">
+                      <ImageOff className="w-4 h-4 shrink-0" />
+                      <span>{t('settings.mediaGenerationDisabled')}</span>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        retryMediaTask(elementInfo.src);
+                      }}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-red-600 dark:text-red-400 bg-red-100 dark:bg-red-900/40 rounded hover:bg-red-200 dark:hover:bg-red-900/60 transition-colors"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                      {t('settings.mediaRetry')}
+                    </button>
+                  )}
+                </div>
+              ) : resolvedSrc ? (
+                <>
+                  <img
+                    src={resolvedSrc}
+                    draggable={false}
+                    style={{
+                      position: 'absolute',
+                      top: imgPosition.top,
+                      left: imgPosition.left,
+                      width: imgPosition.width,
+                      height: imgPosition.height,
+                      filter,
+                    }}
+                    alt=""
+                    onDragStart={(e) => e.preventDefault()}
+                  />
+                  {elementInfo.colorMask && (
+                    <div
+                      className="color-mask absolute inset-0"
+                      style={{
+                        backgroundColor: elementInfo.colorMask,
+                      }}
+                    />
+                  )}
+                </>
+              ) : null}
             </div>
           </div>
         )}
