@@ -107,7 +107,7 @@ export async function GET(request: Request) {
             imageFileByElementId.set(normalized, `/api/shared/files/${encodeURIComponent(f.id)}`);
           }
         }
-        log.info(`[thumbnails] stage ${stageId}: found ${imageFileByElementId.size} image files, placeholders: ${placeholders.map((p) => p.src).join(', ')}`);
+        log.info(`[thumbnails] stage ${stageId}: files=${JSON.stringify([...imageFileByElementId.keys()])}, placeholders=${JSON.stringify(placeholders.map((p) => p.src))}`);
         for (const el of placeholders) {
           const resolved = imageFileByElementId.get(el.src);
           if (resolved) {
