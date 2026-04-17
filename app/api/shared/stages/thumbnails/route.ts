@@ -107,8 +107,15 @@ export async function GET(request: Request) {
             imageFileByElementId.set(normalized, `/api/shared/files/${encodeURIComponent(f.id)}`);
           }
         }
+        log.info(`[thumbnails] stage ${stageId}: found ${imageFileByElementId.size} image files, placeholders: ${placeholders.map((p) => p.src).join(', ')}`);
         for (const el of placeholders) {
-          el.src = imageFileByElementId.get(el.src) ?? '';
+          const resolved = imageFileByElementId.get(el.src);
+          if (resolved) {
+            el.src = resolved;
+          } else {
+            log.warn(`[thumbnails] No file found for placeholder: ${el.src}`);
+            el.src = '';
+          }
         }
       } catch {
         // silently skip file resolution failures for thumbnails
