@@ -44,9 +44,13 @@ export function ImageElement({ elementInfo, selectElement }: ImageElementProps) 
   const task = useMediaGenerationStore((s) => {
     if (!isPlaceholder) return undefined;
     const t = s.tasks[elementInfo.src];
-    if (t && t.stageId !== stageId) return undefined;
+    if (t && t.stageId !== stageId) {
+      console.warn(`[ImageElement] stageId mismatch: task=${t.stageId}, current=${stageId}, element=${elementInfo.src}`);
+      return undefined;
+    }
     return t;
   });
+  console.log(`[ImageElement] ${elementInfo.src}: isPlaceholder=${isPlaceholder}, stageId=${stageId}, taskStatus=${task?.status}`);
 
   const imageGenerationEnabled = useSettingsStore((s) => s.imageGenerationEnabled);
   const resolvedSrc = task?.status === 'done' && task.objectUrl ? task.objectUrl : elementInfo.src;
