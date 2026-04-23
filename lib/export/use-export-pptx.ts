@@ -385,6 +385,15 @@ async function buildPptxBlob(
   ratioPx2Pt: number,
 ): Promise<Blob> {
   const pptx = new pptxgen();
+  
+  // Image resolution statistics for diagnostics
+  let totalImages = 0;
+  let resolvedFromZustand = 0;
+  let resolvedFromIndexedDB = 0;
+  let resolvedFromStatic = 0;
+  let skippedNoSource = 0;
+  let fetchFailed = 0;
+  let fetchSucceeded = 0;
 
   // Set layout based on aspect ratio
   if (viewportRatio === 0.625) pptx.layout = 'LAYOUT_16x10';
@@ -416,6 +425,57 @@ async function buildPptxBlob(
           });
         } else if (isBase64Image(bg.image.src)) {
           pptxSlide.background = { data: bg.image.src };
+        } else if (isMediaPlaceholder(bg.image.src)) {
+          // Resolve background placeholder
+          log.debug(`[PPT-BG] Background is media placeholder: "${bg.image.src}"`);
+          let resolvedBgSrc = bg.image.src;
+          
+          // Priority 1: Zustand
+          const task = useMediaGenerationStore.getState().tasks[bg.image.src];
+          if (task?.status === 'done' && task.objectUrl) {
+            resolvedBgSrc = task.objectUrl;
+            log.debug(`[PPT-BG] ✓ Resolved from Zustand`);
+          } else {
+            // Priority 2: IndexedDB
+            const stageId = useStageStore.getState().stage?.id;
+            if (stageId) {
+              const dbKey = mediaFileKey(stageId, bg.image.src);
+              const record = await db.mediaFiles.get(dbKey).catch(() => undefined);
+              if (record?.ossKey) {
+                resolvedBgSrc = record.ossKey;
+                log.debug(`[PPT-BG] ✓ Resolved from IndexedDB`);
+              }
+            }
+          }
+          
+          if (resolvedBgSrc !== bg.image.src) {
+            // Fetch and convert to base64
+            if (!isBase64Image(resolvedBgSrc)) {
+              try {
+                const resp = await fetch(resolvedBgSrc);
+                if (resp.ok) {
+                  const blob = await resp.blob();
+                  resolvedBgSrc = await new Promise<string>((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onloadend = () => resolve(reader.result as string);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(blob);
+                  });
+                  log.debug(`[PPT-BG] ✓ Converted to base64`);
+                } else {
+                  log.error(`[PPT-BG] ✗ Fetch failed: ${resp.status}`);
+                }
+              } catch (e) {
+                log.error(`[PPT-BG] ✗ Exception: ${e}`);
+              }
+            }
+          }
+          
+          if (isBase64Image(resolvedBgSrc)) {
+            pptxSlide.background = { data: resolvedBgSrc };
+          } else {
+            pptxSlide.background = { path: resolvedBgSrc };
+          }
         } else {
           pptxSlide.background = { path: bg.image.src };
         }
@@ -486,32 +546,88 @@ async function buildPptxBlob(
       else if (el.type === 'image') {
         // Resolve placeholder src → actual image data
         let resolvedSrc = el.src;
+        
+        // DIAGNOSTIC: Log image element details
+        log.debug(`[PPT-IMG] Processing image element: el.src="${el.src}", id="${el.id}"`);
+        
         if (isMediaPlaceholder(el.src)) {
+          log.debug(`[PPT-IMG] Is media placeholder, checking sources...`);
+          
           // Priority 1: in-memory Zustand store (current session)
           const task = useMediaGenerationStore.getState().tasks[el.src];
+          log.debug(`[PPT-IMG] Zustand task: ${task ? `status=${task.status}, objectUrl=${!!task.objectUrl}` : 'NOT FOUND'}`);
+          
           if (task?.status === 'done' && task.objectUrl) {
             resolvedSrc = task.objectUrl;
+            resolvedFromZustand++;
+            log.debug(`[PPT-IMG] ✓ Resolved from Zustand: ${resolvedSrc.substring(0, 80)}...`);
           } else {
             // Priority 2: IndexedDB (restored from server-side storage)
             const stageId = useStageStore.getState().stage?.id;
+            log.debug(`[PPT-IMG] Stage ID from store: ${stageId || 'UNDEFINED'}`);
+            
             if (stageId) {
               const dbKey = mediaFileKey(stageId, el.src);
-              const record = await db.mediaFiles.get(dbKey).catch(() => undefined);
+              log.debug(`[PPT-IMG] IndexedDB lookup: key="${dbKey}"`);
+              
+              const record = await db.mediaFiles.get(dbKey).catch((e) => {
+                log.error(`[PPT-IMG] IndexedDB get error: ${e}`);
+                return undefined;
+              });
+              
+              log.debug(`[PPT-IMG] IndexedDB record: ${record ? `ossKey="${record.ossKey?.substring(0, 80)}..."` : 'NOT FOUND'}`);
+              
               if (record?.ossKey) {
                 resolvedSrc = record.ossKey;
+                resolvedFromIndexedDB++;
+                log.debug(`[PPT-IMG] ✓ Resolved from IndexedDB: ${resolvedSrc.substring(0, 80)}...`);
+              } else {
+                // Priority 3: Try to find by elementId directly
+                log.debug(`[PPT-IMG] Trying elementId lookup in mediaFiles table...`);
+                const allMedia = await db.mediaFiles.where('stageId').equals(stageId).toArray();
+                log.debug(`[PPT-IMG] Total media records for stage: ${allMedia.length}`);
+                
+                for (const m of allMedia) {
+                  log.debug(`[PPT-IMG]   - id="${m.id}", type="${m.type}", ossKey="${m.ossKey?.substring(0, 50)}..."`);
+                }
+                
+                // Try to find a record where id contains the elementId
+                const matchingRecord = allMedia.find(m => m.id.includes(el.src) || m.id.includes(el.id || ''));
+                if (matchingRecord?.ossKey) {
+                  resolvedSrc = matchingRecord.ossKey;
+                  resolvedFromIndexedDB++;
+                  log.debug(`[PPT-IMG] ✓ Resolved from IndexedDB (by search): ${resolvedSrc.substring(0, 80)}...`);
+                }
               }
             }
+            
             if (resolvedSrc === el.src) {
+              log.warn(`[PPT-IMG] ✗ Could not resolve placeholder "${el.src}" - skipping element`);
+              skippedNoSource++;
               continue; // Media not ready, skip
             }
           }
+        } else {
+          resolvedFromStatic++;
+          log.debug(`[PPT-IMG] Not a placeholder (static image), using directly`);
         }
 
         // Fetch and convert to base64 for embedding in PPTX
         // (blob: URLs and remote URLs won't work in offline PPTX)
         if (!isBase64Image(resolvedSrc)) {
+          log.debug(`[PPT-IMG] Not base64, fetching from: ${resolvedSrc.substring(0, 100)}...`);
           try {
             const resp = await fetch(resolvedSrc);
+            log.debug(`[PPT-IMG] Fetch response: status=${resp.status}, content-type=${resp.headers.get('content-type')}`);
+            
+            if (!resp.ok) {
+              log.error(`[PPT-IMG] ✗ Fetch failed with status ${resp.status}`);
+              fetchFailed++;
+              log.warn('Failed to convert image to base64, skipping element');
+              continue;
+            }
+            
+            fetchSucceeded++;
             const blob = await resp.blob();
             resolvedSrc = await new Promise<string>((resolve, reject) => {
               const reader = new FileReader();
@@ -519,10 +635,14 @@ async function buildPptxBlob(
               reader.onerror = reject;
               reader.readAsDataURL(blob);
             });
-          } catch {
+            log.debug(`[PPT-IMG] ✓ Converted to base64, length=${resolvedSrc.length}`);
+          } catch (err) {
+            log.error(`[PPT-IMG] ✗ Exception during fetch/convert: ${err}`);
             log.warn('Failed to convert image to base64, skipping element');
             continue;
           }
+        } else {
+          log.debug(`[PPT-IMG] Already base64, using as-is`);
         }
 
         const options: pptxgen.ImageProps = {
@@ -565,6 +685,8 @@ async function buildPptxBlob(
         }
 
         pptxSlide.addImage(options);
+        
+        totalImages++;
       }
 
       // ── SHAPE ──
@@ -1089,6 +1211,17 @@ async function buildPptxBlob(
       }
     }
   }
+
+  // Image resolution summary
+  log.info(`[PPT-IMG] === Image Resolution Summary ===`);
+  log.info(`[PPT-IMG] Total images processed: ${totalImages}`);
+  log.info(`[PPT-IMG]   - Resolved from Zustand: ${resolvedFromZustand}`);
+  log.info(`[PPT-IMG]   - Resolved from IndexedDB: ${resolvedFromIndexedDB}`);
+  log.info(`[PPT-IMG]   - Static (not placeholder): ${resolvedFromStatic}`);
+  log.info(`[PPT-IMG]   - Skipped (no source): ${skippedNoSource}`);
+  log.info(`[PPT-IMG]   - Fetch succeeded: ${fetchSucceeded}`);
+  log.info(`[PPT-IMG]   - Fetch failed: ${fetchFailed}`);
+  log.info(`[PPT-IMG] =================================`);
 
   return (await pptx.write({ outputType: 'blob' })) as Blob;
 }
