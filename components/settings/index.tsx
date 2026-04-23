@@ -618,7 +618,7 @@ export function SettingsDialog({ open, onOpenChange, initialSection }: SettingsD
         );
       }
       case 'tts': {
-        const ttsIcon = TTS_PROVIDERS[ttsProviderId]?.icon;
+        const ttsIcon = TTS_PROVIDERS[ttsProviderId as keyof typeof TTS_PROVIDERS]?.icon;
         return (
           <>
             {ttsIcon ? (
@@ -638,7 +638,7 @@ export function SettingsDialog({ open, onOpenChange, initialSection }: SettingsD
         );
       }
       case 'asr': {
-        const asrIcon = ASR_PROVIDERS[asrProviderId]?.icon;
+        const asrIcon = ASR_PROVIDERS[asrProviderId as keyof typeof ASR_PROVIDERS]?.icon;
         return (
           <>
             {asrIcon ? (

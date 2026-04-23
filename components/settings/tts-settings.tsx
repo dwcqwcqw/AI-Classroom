@@ -33,10 +33,10 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
   const effectiveVoice =
     selectedProviderId === activeProviderId
       ? ttsVoice
-      : DEFAULT_TTS_VOICES[selectedProviderId] || 'default';
+      : DEFAULT_TTS_VOICES[selectedProviderId as keyof typeof DEFAULT_TTS_VOICES] || 'default';
 
-  const ttsProvider = TTS_PROVIDERS[selectedProviderId] ?? TTS_PROVIDERS['openai-tts'];
-  const isServerConfigured = !!ttsProvidersConfig[selectedProviderId]?.isServerConfigured;
+  const ttsProvider = TTS_PROVIDERS[selectedProviderId as keyof typeof TTS_PROVIDERS] ?? TTS_PROVIDERS['openai-tts'];
+  const isServerConfigured = !!(ttsProvidersConfig as Record<string, { isServerConfigured?: boolean } | undefined>)[selectedProviderId]?.isServerConfigured;
 
   const [showApiKey, setShowApiKey] = useState(false);
   const [testText, setTestText] = useState(t('settings.ttsTestTextDefault'));
@@ -317,7 +317,7 @@ export function TTSSettings({ selectedProviderId }: TTSSettingsProps) {
         <div className="space-y-2">
           <Label className="text-sm text-muted-foreground">{t('settings.availableModels')}</Label>
           <div className="flex flex-wrap gap-2">
-            {ttsProvider.models.map((model) => (
+            {ttsProvider.models.map((model: { id: string; name: string }) => (
               <div
                 key={model.id}
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-muted/50 border border-border/40 text-xs font-mono text-muted-foreground"

@@ -999,7 +999,31 @@ export const PROVIDERS: Record<ProviderId, ProviderConfig> = {
       },
     ],
   },
+  ollama: {
+    id: 'ollama',
+    name: 'Ollama',
+    type: 'openai',
+    defaultBaseUrl: 'http://localhost:11434/v1',
+    requiresApiKey: false,
+    icon: '/logos/ollama.svg',
+    models: [
+      {
+        id: 'llama4-17b',
+        name: 'Llama 4 17B',
+        contextWindow: 131072,
+        outputWindow: 16384,
+        capabilities: { streaming: true, tools: true, vision: false },
+      },
+    ],
+  },
 };
+
+export const MONO_LOGO_PROVIDERS: ReadonlySet<string> = new Set(['openai', 'ollama']);
+
+export function isProviderKeyRequired(providerId: ProviderId): boolean {
+  const provider = PROVIDERS[providerId];
+  return provider?.requiresApiKey ?? true;
+}
 
 /**
  * Get provider config (from built-in or unified config in localStorage)

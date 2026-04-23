@@ -109,7 +109,7 @@ export async function POST(req: NextRequest) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'scene and instruction are required');
     }
 
-    const { model: languageModel, modelInfo, modelString } = resolveModelFromHeaders(req);
+    const { model: languageModel, modelInfo, modelString } = await resolveModelFromHeaders(req);
     log.info(`Scene refine: scene="${scene.title}" type=${scene.type} model=${modelString}`);
 
     const encoder = new TextEncoder();
@@ -147,12 +147,14 @@ export async function POST(req: NextRequest) {
           const newContent = await generateSceneContent(
             outline,
             aiCall,
-            undefined,  // no PDF images for refinement
-            undefined,  // no imageMapping
-            undefined,  // no languageModel override (PBL path)
-            false,      // visionEnabled = false for refinement
-            {},         // generatedMediaMapping
-            agents,
+            {
+              assignedImages: undefined,
+              imageMapping: undefined,
+              languageModel: undefined,
+              visionEnabled: false,
+              generatedMediaMapping: {},
+              agents,
+            },
           );
 
           if (!newContent) {
@@ -183,8 +185,7 @@ export async function POST(req: NextRequest) {
             outline,
             newContent,
             aiCall,
-            ctx,
-            agents,
+            { ctx, agents },
           );
 
           // ── Step 6: Build the complete Scene object ──

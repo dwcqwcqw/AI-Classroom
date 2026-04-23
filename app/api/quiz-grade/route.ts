@@ -38,8 +38,13 @@ export async function POST(req: NextRequest) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'question and userAnswer are required');
     }
 
+    // Validate points is a positive finite number
+    if (!points || !Number.isFinite(points) || points <= 0) {
+      return apiError('INVALID_REQUEST', 400, 'points must be a positive number');
+    }
+
     // Resolve model from request headers
-    const { model: languageModel } = resolveModelFromHeaders(req);
+    const { model: languageModel } = await resolveModelFromHeaders(req);
 
     const isZh = language === 'zh-CN';
 

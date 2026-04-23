@@ -32,8 +32,8 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
   const asrProvidersConfig = useSettingsStore((state) => state.asrProvidersConfig);
   const setASRProviderConfig = useSettingsStore((state) => state.setASRProviderConfig);
 
-  const asrProvider = ASR_PROVIDERS[selectedProviderId] ?? ASR_PROVIDERS['openai-whisper'];
-  const isServerConfigured = !!asrProvidersConfig[selectedProviderId]?.isServerConfigured;
+  const asrProvider = ASR_PROVIDERS[selectedProviderId as keyof typeof ASR_PROVIDERS] ?? ASR_PROVIDERS['openai-whisper'];
+  const isServerConfigured = !!(asrProvidersConfig as Record<string, { isServerConfigured?: boolean } | undefined>)[selectedProviderId]?.isServerConfigured;
 
   const [showApiKey, setShowApiKey] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
@@ -305,7 +305,7 @@ export function ASRSettings({ selectedProviderId }: ASRSettingsProps) {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {asrProvider.models.map((model) => (
+              {asrProvider.models.map((model: { id: string; name: string }) => (
                 <SelectItem key={model.id} value={model.id}>
                   {model.name}
                 </SelectItem>

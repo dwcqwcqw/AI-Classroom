@@ -27,8 +27,6 @@ import {
   resolveTTSApiKey,
   resolveTTSBaseUrl,
 } from '@/lib/server/provider-config';
-import { getR2 } from '@/lib/server/cloudflare-r2';
-import { getD1, ensureSharedTables } from '@/lib/server/cloudflare-d1';
 import type { SceneOutline } from '@/lib/types/generation';
 import type { Scene } from '@/lib/types/stage';
 import type { SpeechAction } from '@/lib/types/action';
@@ -226,106 +224,51 @@ export async function generateTTSForClassroom(
     log.warn(`No API key for TTS provider "${providerId}", skipping TTS generation`);
     return;
   }
-  const ttsBaseUrl = resolveTTSBaseUrl(providerId) || TTS_PROVIDERS[providerId]?.defaultBaseUrl;
-  const voice = DEFAULT_TTS_VOICES[providerId] || 'default';
-  const format = TTS_PROVIDERS[providerId]?.supportedFormats?.[0] || 'mp3';
-
-  // Prepare R2 + D1 for persistent audio storage (enables fast client-side playback)
-  const r2 = getR2();
-  const d1 = getD1();
-  if (r2 && d1) {
-    await ensureSharedTables(d1);
-  } else {
-    log.warn('R2 or D1 not available — audio will only be stored on local disk (slow playback)');
-  }
-
-  const mimeType = format === 'wav' ? 'audio/wav' : format === 'ogg' ? 'audio/ogg' : format === 'aac' ? 'audio/aac' : 'audio/mpeg';
-
-  // Collect all speech actions and their audio IDs upfront
-  type SpeechTask = {
-    scene: Scene;
-    action: SpeechAction;
-    audioId: string;
-    filename: string;
-  };
-  const tasks: SpeechTask[] = [];
+  const ttsBaseUrl =
+    resolveTTSBaseUrl(providerId) ||
+    TTS_PROVIDERS[providerId as keyof typeof TTS_PROVIDERS]?.defaultBaseUrl;
+  const voice = DEFAULT_TTS_VOICES[providerId as keyof typeof DEFAULT_TTS_VOICES] || 'default';
+  const format =
+    TTS_PROVIDERS[providerId as keyof typeof TTS_PROVIDERS]?.supportedFormats?.[0] || 'mp3';
 
   for (const scene of scenes) {
     if (!scene.actions) continue;
+
+    // Split long speech actions into multiple shorter ones before TTS generation,
+    // mirroring the client-side approach. Each sub-action gets its own audio file.
     scene.actions = splitLongSpeechActions(scene.actions, providerId);
+
+    // Use scene order to make audio IDs unique across scenes
+    const sceneOrder = scene.order;
+
     for (const action of scene.actions) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      if (action.type !== 'speech' || !(action as SpeechAction).text) continue;
       const speechAction = action as SpeechAction;
-      if (!speechAction.text) continue;
-      const audioId = `tts_${action.id}`;
-      const filename = `${audioId}.${format}`;
-      tasks.push({ scene, action: speechAction, audioId, filename });
-    }
-  }
+      // Include scene order in audioId to prevent collision across scenes
+      const audioId = `tts_s${sceneOrder}_${action.id}`;
 
-  if (tasks.length === 0) {
-    log.info('No speech actions found, skipping TTS generation');
-    return;
-  }
+      try {
+        const result = await generateTTS(
+          {
+            providerId,
+            modelId: DEFAULT_TTS_MODELS[providerId as keyof typeof DEFAULT_TTS_MODELS] || '',
+            apiKey,
+            baseUrl: ttsBaseUrl,
+            voice,
+            speed: speechAction.speed,
+          },
+          speechAction.text,
+        );
 
-  // Run all TTS requests in parallel (Promise.allSettled to isolate failures)
-  const CONCURRENCY = 4;
-  const results = await Promise.allSettled(
-    tasks.slice(0, 200).map((task) =>
-      generateTTS(
-        {
-          providerId,
-          modelId: DEFAULT_TTS_MODELS[providerId] || '',
-          apiKey,
-          baseUrl: ttsBaseUrl,
-          voice,
-          speed: task.action.speed,
-        },
-        task.action.text,
-      ).then((result) => ({ task, result })),
-    ),
-  );
+        const filename = `${audioId}.${format}`;
+        await fs.writeFile(path.join(audioDir, filename), result.audio);
 
-  // Write audio files sequentially (sequential I/O is fine)
-  let successCount = 0;
-  for (const settled of results) {
-    if (settled.status !== 'fulfilled') {
-      const task = tasks[results.indexOf(settled)];
-      log.warn(`TTS generation failed for action ${task?.action.id}:`, settled.reason);
-      continue;
-    }
-    const { task, result } = settled.value;
-    try {
-      // Always write to local disk (needed for local dev / classroom-media API)
-      await fs.writeFile(path.join(audioDir, task.filename), result.audio);
-
-      // Upload to R2 + D1 so client can fetch from IndexedDB (fast path)
-      if (r2 && d1) {
-        const objectKey = `shared/${classroomId}/${task.audioId}.${format}`;
-        await r2.put(objectKey, result.audio, {
-          httpMetadata: { contentType: mimeType },
-        });
-        const now = Date.now();
-        await d1
-          .prepare(
-            `INSERT OR REPLACE INTO shared_files (id, stage_id, file_name, object_key, mime_type, size_bytes, kind, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .bind(task.audioId, classroomId, `${task.audioId}.${format}`, objectKey, mimeType, result.audio.byteLength, 'audio', now)
-          .run();
-        // audioUrl points to R2-backed shared-files API (fast client-side fetch)
-        task.action.audioUrl = `/api/shared/files/${encodeURIComponent(task.audioId)}`;
-      } else {
-        // Fallback: serve from local disk
-        task.action.audioUrl = mediaServingUrl(baseUrl, classroomId, `audio/${task.filename}`);
+        speechAction.audioId = audioId;
+        speechAction.audioUrl = mediaServingUrl(baseUrl, classroomId, `audio/${filename}`);
+        log.info(`Generated TTS: ${filename} (${result.audio.length} bytes)`);
+      } catch (err) {
+        log.warn(`TTS generation failed for action ${action.id}:`, err);
       }
-
-      task.action.audioId = task.audioId;
-      successCount++;
-    } catch (writeErr) {
-      log.warn(`TTS write failed for ${task.filename}:`, writeErr);
     }
   }
-
-  log.info(`TTS generation complete: ${successCount}/${tasks.length} succeeded`);
 }

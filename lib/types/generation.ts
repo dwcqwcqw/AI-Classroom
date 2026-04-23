@@ -86,6 +86,7 @@ export interface UserRequirements {
   userBio?: string; // Student background for personalization
   webSearch?: boolean; // Enable web search for richer context
   sceneCounts?: SceneCountConfig; // Optional explicit scene count overrides
+  interactiveMode?: boolean; // Enable Interactive Mode for interactive-first generation
 }
 
 /**
@@ -118,6 +119,7 @@ export interface SceneOutline {
   teachingObjective?: string;
   estimatedDuration?: number; // seconds
   order: number;
+  languageNote?: string; // LLM-inferred language note for this scene
   language?: 'zh-CN' | 'en-US'; // Generation language (inherited from requirements)
   // Suggested image IDs (from PDF-extracted images)
   suggestedImageIds?: string[]; // e.g., ["img_1", "img_3"]
@@ -129,7 +131,10 @@ export interface SceneOutline {
     difficulty: 'easy' | 'medium' | 'hard';
     questionTypes: ('single' | 'multiple' | 'text')[];
   };
-  // Interactive-specific config
+  /**
+   * @deprecated Use widgetType + widgetOutline instead
+   * Legacy interactive config - kept for backward compatibility only
+   */
   interactiveConfig?: {
     conceptName: string;
     conceptOverview: string;
@@ -142,8 +147,29 @@ export interface SceneOutline {
     projectDescription: string;
     targetSkills: string[];
     issueCount?: number;
-    language: 'zh-CN' | 'en-US';
+    language?: 'zh-CN' | 'en-US';
   };
+  // Widget fields (required for type === 'interactive' in unified mode)
+  widgetType?: string;
+  widgetOutline?: WidgetOutline;
+}
+
+/**
+ * Widget outline for interactive scenes (unified mode)
+ */
+export interface WidgetOutline {
+  concept?: string;
+  keyVariables?: string[]; // simulation
+  diagramType?: 'flowchart' | 'mindmap' | 'hierarchy' | 'system'; // diagram
+  language?: string; // code
+  gameType?: 'quiz' | 'puzzle' | 'strategy' | 'card' | 'action'; // game
+  visualizationType?: string; // visualization3d
+  objects?: string[]; // visualization3d
+  interactions?: string[]; // visualization3d
+  challenge?: string; // game
+  playerControls?: string[]; // game
+  nodeCount?: number; // diagram
+  challengeType?: string; // code
 }
 
 // ==================== Stage 3 Output: Generated Content ====================
@@ -196,6 +222,16 @@ export interface ScientificModel {
 export interface GeneratedInteractiveContent {
   html: string;
   scientificModel?: ScientificModel;
+  widgetType?: string;
+  widgetConfig?: Record<string, unknown>;
+  teacherActions?: Array<{
+    id: string;
+    type: 'speech' | 'highlight' | 'annotation' | 'reveal' | 'setState';
+    target?: string;
+    content?: string;
+    state?: Record<string, unknown>;
+    label?: string;
+  }>;
 }
 
 // ==================== Legacy Types (for compatibility) ====================

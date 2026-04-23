@@ -1,4 +1,5 @@
 import { defaultLocale, type Locale } from './types';
+
 export { type Locale, defaultLocale } from './types';
 import { commonZhCN, commonEnUS } from './common';
 import { stageZhCN, stageEnUS } from './stage';

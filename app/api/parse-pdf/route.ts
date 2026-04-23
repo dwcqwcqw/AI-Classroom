@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
 
     const clientBaseUrl = baseUrl || undefined;
     if (clientBaseUrl && process.env.NODE_ENV === 'production') {
-      const ssrfError = validateUrlForSSRF(clientBaseUrl);
+      const ssrfError = await validateUrlForSSRF(clientBaseUrl);
       if (ssrfError) {
         return apiError('INVALID_URL', 403, ssrfError);
       }
@@ -66,8 +66,8 @@ export async function POST(req: NextRequest) {
     const resultWithMetadata: ParsedPdfContent = {
       ...result,
       metadata: {
-        pageCount: result.metadata?.pageCount || 0, // Ensure pageCount is always a number
         ...result.metadata,
+        pageCount: result.metadata?.pageCount ?? 0, // Ensure pageCount is always a number
         fileName: pdfFile.name,
         fileSize: pdfFile.size,
       },

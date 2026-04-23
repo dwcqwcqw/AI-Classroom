@@ -44,7 +44,7 @@ export interface StageRecord {
   description?: string;
   createdAt: number; // timestamp
   updatedAt: number; // timestamp
-  language?: string;
+  languageDirective?: string;
   style?: string;
   currentSceneId?: string;
   agentIds?: string[]; // Agent IDs selected at creation time
@@ -77,6 +77,7 @@ export interface AudioFileRecord {
   voice?: string; // Voice used
   createdAt: number;
   ossKey: string; // Full CDN URL for this audio blob (required - all audio stored in R2)
+  blob?: Blob; // Optional blob for temporary storage
 }
 
 /**
@@ -148,6 +149,8 @@ export interface MediaFileRecord {
   errorCode?: string; // Structured error code (e.g. 'CONTENT_SENSITIVE')
   ossKey: string; // Full CDN URL for this media blob (required - all media stored in R2)
   createdAt: number;
+  blob?: Blob; // Optional blob for temporary storage
+  poster?: Blob; // Optional poster blob for video files
 }
 
 /**
@@ -173,7 +176,7 @@ export function mediaFileKey(stageId: string, elementId: string): string {
 // ==================== Database Definition ====================
 
 const DATABASE_NAME = 'MAIC-Database';
-const _DATABASE_VERSION = 8;
+const _DATABASE_VERSION = 9;
 
 /**
  * MAIC Database Instance
@@ -307,6 +310,40 @@ class MAICDatabase extends Dexie {
       mediaFiles: 'id, stageId, [stageId+type]',
       generatedAgents: 'id, stageId',
     });
+
+    // Version 9: Migrate legacy `language` field to `languageDirective`
+    // Old stages stored a BCP-47 locale code (e.g. "zh-CN"); new code expects a
+    // natural-language directive. Convert known locales and drop the old field.
+    const LOCALE_TO_DIRECTIVE: Record<string, string> = {
+      'zh-CN': 'Deliver the entire course in Chinese (Simplified, zh-CN).',
+      'en-US': 'Deliver the entire course in English (en-US).',
+      'ja-JP': 'Deliver the entire course in Japanese (ja-JP).',
+      'ru-RU': 'Deliver the entire course in Russian (ru-RU).',
+    };
+    this.version(9)
+      .stores({
+        stages: 'id, updatedAt',
+        scenes: 'id, stageId, order, [stageId+order]',
+        audioFiles: 'id, createdAt',
+        imageFiles: 'id, createdAt',
+        snapshots: '++id',
+        chatSessions: 'id, stageId, [stageId+createdAt]',
+        playbackState: 'stageId',
+        stageOutlines: 'stageId',
+        mediaFiles: 'id, stageId, [stageId+type]',
+        generatedAgents: 'id, stageId',
+      })
+      .upgrade(async (tx) => {
+        const table = tx.table('stages');
+        await table.toCollection().modify((stage: Record<string, unknown>) => {
+          const lang = stage.language as string | undefined;
+          if (lang && !stage.languageDirective) {
+            stage.languageDirective =
+              LOCALE_TO_DIRECTIVE[lang] || `Deliver the entire course in ${lang}.`;
+          }
+          delete stage.language;
+        });
+      });
   }
 }
 

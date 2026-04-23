@@ -6,15 +6,16 @@
  * so the frontend can display them incrementally.
  *
  * SSE events:
+ *   { type: 'languageDirective', data: string }
  *   { type: 'outline', data: SceneOutline, index: number }
- *   { type: 'done', outlines: SceneOutline[] }
+ *   { type: 'done', outlines: SceneOutline[], languageDirective: string }
  *   { type: 'error', error: string }
  */
 
 import { NextRequest } from 'next/server';
 import { callLLM, streamLLM } from '@/lib/ai/llm';
 import { parseModelString } from '@/lib/ai/providers';
-import { buildPrompt, PROMPT_IDS } from '@/lib/generation/prompts';
+import { buildPrompt, PROMPT_IDS } from '@/lib/prompts';
 import {
   formatImageDescription,
   formatImagePlaceholder,
@@ -39,16 +40,44 @@ const log = createLogger('Outlines Stream');
 export const maxDuration = 300;
 
 /**
+ * Extract the languageDirective from the streamed wrapper JSON.
+ * Matches `"languageDirective":"<value>"` in partial JSON like:
+ *   {"languageDirective":"用中文授课...","outlines":[...
+ */
+function extractLanguageDirective(buffer: string): string | null {
+  const match = buffer.match(/"languageDirective"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+  if (!match) return null;
+  try {
+    return JSON.parse(`"${match[1]}"`);
+  } catch {
+    return match[1];
+  }
+}
+
+/**
  * Incremental JSON array parser.
  * Extracts complete top-level objects from a partially-streamed JSON array.
+ * Supports both a flat array `[{...},{...}]` and a wrapper object
+ * `{"languageDirective":"...","outlines":[{...},{...}]}`.
  * Returns newly found objects (skipping `alreadyParsed` count).
  */
 function extractNewOutlines(buffer: string, alreadyParsed: number): SceneOutline[] {
   const results: SceneOutline[] = [];
 
-  // Find the start of the JSON array (skip any markdown fencing)
-  const stripped = buffer.replace(/^[\s\S]*?(?=\[)/, '');
-  const arrayStart = stripped.indexOf('[');
+  // Strip markdown fencing if present
+  const stripped = buffer.replace(/^[\s\S]*?(?=[\[{])/, '');
+
+  // Find the outlines array — either nested in {"outlines": [...]} or a flat array
+  let arrayStart = -1;
+  const outlinesKeyIdx = stripped.indexOf('"outlines"');
+  if (outlinesKeyIdx >= 0) {
+    // Wrapper format: find [ after "outlines":
+    arrayStart = stripped.indexOf('[', outlinesKeyIdx);
+  } else {
+    // Flat array fallback
+    arrayStart = stripped.indexOf('[');
+  }
+
   if (arrayStart === -1) return results;
 
   let depth = 0;
@@ -104,7 +133,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
 
     // Get API configuration from request headers
-    const { model: languageModel, modelInfo, modelString } = resolveModelFromHeaders(req);
+    const { model: languageModel, modelInfo, modelString } = await resolveModelFromHeaders(req);
     resolvedModelString = modelString;
 
     if (!body.requirements) {
@@ -121,12 +150,17 @@ export async function POST(req: NextRequest) {
     };
     requirementSnippet = requirements?.requirement?.substring(0, 60);
 
+    // Build user profile string for language inference context
+    const userProfileText =
+      requirements.userNickname || requirements.userBio
+        ? `## Student Profile\n\nStudent: ${requirements.userNickname || 'Unknown'}${requirements.userBio ? ` — ${requirements.userBio}` : ''}\n\nConsider this student's background when designing the course. Adapt difficulty, examples, and teaching approach accordingly.\n\n---`
+        : '';
+
     // Detect vision capability
     const hasVision = !!modelInfo?.capabilities?.vision;
 
     // Build prompt (same logic as generateSceneOutlinesFromRequirements)
-    let availableImagesText =
-      requirements.language === 'zh-CN' ? '无可用图片' : 'No images available';
+    let availableImagesText = 'No images available';
     let visionImages: Array<{ id: string; src: string }> | undefined;
 
     if (pdfImages && pdfImages.length > 0) {
@@ -137,11 +171,9 @@ export async function POST(req: NextRequest) {
         const textOnlySlice = allWithSrc.slice(MAX_VISION_IMAGES);
         const noSrcImages = pdfImages.filter((img) => !imageMapping[img.id]);
 
-        const visionDescriptions = visionSlice.map((img) =>
-          formatImagePlaceholder(img, requirements.language),
-        );
+        const visionDescriptions = visionSlice.map((img) => formatImagePlaceholder(img));
         const textDescriptions = [...textOnlySlice, ...noSrcImages].map((img) =>
-          formatImageDescription(img, requirements.language),
+          formatImageDescription(img),
         );
         availableImagesText = [...visionDescriptions, ...textDescriptions].join('\n');
 
@@ -153,9 +185,7 @@ export async function POST(req: NextRequest) {
         }));
       } else {
         // Text-only mode: full descriptions
-        availableImagesText = pdfImages
-          .map((img) => formatImageDescription(img, requirements.language))
-          .join('\n');
+        availableImagesText = pdfImages.map((img) => formatImageDescription(img)).join('\n');
       }
     }
 
@@ -191,18 +221,27 @@ export async function POST(req: NextRequest) {
       return `\n\n## 用户指定的场景数量约束（必须严格遵守）\n\n${lines.join('\n')}\n\n以上约束优先级高于根据课程时长自动推断，请严格按照要求生成指定数量的场景。`;
     })();
 
-    const prompts = buildPrompt(PROMPT_IDS.REQUIREMENTS_TO_OUTLINES, {
-      requirement: requirements.requirement + sceneCountConstraint,
-      language: requirements.language,
+    // Check if Interactive Mode is enabled (upstream feature)
+    const interactiveMode = requirements.interactiveMode === true;
+
+    // Merge both: upstream's interactiveMode selection + HEAD's sceneCountConstraint
+    const effectiveRequirement = requirements.requirement + sceneCountConstraint;
+    const promptId = interactiveMode
+      ? PROMPT_IDS.INTERACTIVE_OUTLINES
+      : PROMPT_IDS.REQUIREMENTS_TO_OUTLINES;
+
+    const prompts = buildPrompt(promptId, {
+      requirement: effectiveRequirement,
       pdfContent: pdfText
         ? pdfText.substring(0, MAX_PDF_CONTENT_CHARS)
         : requirements.language === 'zh-CN'
           ? '无'
           : 'None',
       availableImages: availableImagesText,
-      researchContext: researchContext || (requirements.language === 'zh-CN' ? '无' : 'None'),
+      researchContext: researchContext || 'None',
       mediaGenerationPolicy,
       teacherContext,
+      userProfile: userProfileText,
     });
 
     if (!prompts) {
@@ -262,6 +301,7 @@ export async function POST(req: NextRequest) {
               };
 
           let parsedOutlines: SceneOutline[] = [];
+          let languageDirective: string | null = null;
           let lastError: string | undefined;
           let lastAttempt = 0;
           let lastResponseLength = 0;
@@ -273,9 +313,22 @@ export async function POST(req: NextRequest) {
 
               let fullText = '';
               parsedOutlines = [];
+              languageDirective = null;
 
               for await (const chunk of result.textStream) {
                 fullText += chunk;
+
+                // Try to extract language directive early
+                if (!languageDirective) {
+                  languageDirective = extractLanguageDirective(fullText);
+                  if (languageDirective) {
+                    const ldEvent = JSON.stringify({
+                      type: 'languageDirective',
+                      data: languageDirective,
+                    });
+                    controller.enqueue(encoder.encode(`data: ${ldEvent}\n\n`));
+                  }
+                }
 
                 // Try to extract new outlines from the accumulated text
                 const newOutlines = extractNewOutlines(fullText, parsedOutlines.length);
@@ -388,6 +441,8 @@ export async function POST(req: NextRequest) {
             const doneEvent = JSON.stringify({
               type: 'done',
               outlines: uniquifiedOutlines,
+              languageDirective:
+                languageDirective || 'Teach in the language that matches the user requirement.',
             });
             controller.enqueue(encoder.encode(`data: ${doneEvent}\n\n`));
           } else {
@@ -434,9 +489,14 @@ export async function POST(req: NextRequest) {
     });
   } catch (error) {
     log.error(
-      `Outline streaming failed [requirement="${requirementSnippet ?? 'unknown'}...", model=${resolvedModelString ?? 'unknown'}]:`,
-      error,
+      `Scene outlines stream error [req=${requirementSnippet}]:`,
+      error instanceof Error ? error.message : String(error),
     );
-    return apiError('INTERNAL_ERROR', 500, error instanceof Error ? error.message : String(error));
+    return apiError(
+      'INTERNAL_ERROR',
+      500,
+      'Failed to stream scene outlines',
+      error instanceof Error ? error.message : String(error),
+    );
   }
 }

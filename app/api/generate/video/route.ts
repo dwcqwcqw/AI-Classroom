@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
     const clientModel = decodeHeaderValue(request.headers.get('x-video-model'));
 
     if (clientBaseUrl && process.env.NODE_ENV === 'production') {
-      const ssrfError = validateUrlForSSRF(clientBaseUrl);
+      const ssrfError = await validateUrlForSSRF(clientBaseUrl);
       if (ssrfError) {
         return apiError('INVALID_URL', 403, ssrfError);
       }
