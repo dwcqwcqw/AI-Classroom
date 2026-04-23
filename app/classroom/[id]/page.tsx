@@ -180,7 +180,13 @@ export default function ClassroomDetailPage() {
         const mediaPromise = (async () => {
           updateStep('media_tasks', 'running');
           try {
-            await useMediaGenerationStore.getState().restoreFromDB(classroomId);
+            // Restore from both IndexedDB (local) and server (cloud)
+            // IndexedDB: for media generated in current browser session
+            // Server: for media from cloud-loaded classrooms
+            await Promise.all([
+              useMediaGenerationStore.getState().restoreFromDB(classroomId),
+              useMediaGenerationStore.getState().restoreFromServer(classroomId),
+            ]);
             if (abort.signal.aborted) return;
             updateStep('media_tasks', 'ok');
           } catch (mediaErr) {

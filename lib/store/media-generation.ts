@@ -56,6 +56,9 @@ interface MediaGenerationState {
   // Restore from IndexedDB on page load
   restoreFromDB: (stageId: string) => Promise<void>;
 
+  // Restore from server (D1) on page load - used when loading from cloud storage
+  restoreFromServer: (stageId: string) => Promise<void>;
+
   // Cleanup
   clearStage: (stageId: string) => void;
   revokeObjectUrls: () => void;
@@ -205,6 +208,64 @@ export const useMediaGenerationStore = create<MediaGenerationState>()((set, get)
       }
     } catch (err) {
       log.error('Failed to restore from DB:', err);
+    }
+  },
+
+  restoreFromServer: async (stageId) => {
+    try {
+      log.info(`[restoreFromServer] Fetching shared files for stage ${stageId}`);
+      const res = await fetch(`/api/shared/files?stageId=${encodeURIComponent(stageId)}`);
+      if (!res.ok) {
+        log.warn(`[restoreFromServer] API returned ${res.status}, skipping`);
+        return;
+      }
+      const json = await res.json() as { success: boolean; files?: Array<{
+        id: string;
+        fileName: string;
+        kind: string;
+        url?: string;
+      }> };
+      const files = json.files ?? [];
+      log.info(`[restoreFromServer] Got ${files.length} files from server`);
+
+      // Map fileName (without extension) to elementId placeholder
+      // Files are named as: gen_img_xxx.png, gen_vid_xxx.mp4, etc.
+      const restored: Record<string, MediaTask> = {};
+      for (const f of files) {
+        if (f.kind !== 'image' && f.kind !== 'video') continue;
+
+        // Extract elementId from filename: "gen_img_abc123" from "gen_img_abc123.png"
+        const baseName = f.fileName.replace(/\.[^.]+$/, ''); // Remove extension
+        const normalizedId = baseName.endsWith('-poster') ? baseName.slice(0, -7) : baseName;
+
+        // Check if this is a generated media placeholder
+        if (!isMediaPlaceholder(normalizedId)) {
+          log.debug(`[restoreFromServer] Skipping non-placeholder file: ${normalizedId}`);
+          continue;
+        }
+
+        const mediaType = normalizedId.startsWith('gen_vid_') ? 'video' : 'image';
+        const objectUrl = f.url ?? `/api/shared/files/${encodeURIComponent(f.id)}`;
+
+        restored[normalizedId] = {
+          elementId: normalizedId,
+          type: mediaType,
+          status: 'done',
+          prompt: '',
+          params: {},
+          objectUrl,
+          retryCount: 0,
+          stageId,
+        };
+        log.info(`[restoreFromServer] Restored ${normalizedId} -> ${objectUrl}`);
+      }
+
+      if (Object.keys(restored).length > 0) {
+        set((s) => ({ tasks: { ...s.tasks, ...restored } }));
+        log.info(`[restoreFromServer] Updated store with ${Object.keys(restored).length} tasks`);
+      }
+    } catch (err) {
+      log.error('Failed to restore from server:', err);
     }
   },
 
