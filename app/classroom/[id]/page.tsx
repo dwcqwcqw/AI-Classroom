@@ -13,7 +13,6 @@ import { useWhiteboardHistoryStore } from '@/lib/store/whiteboard-history';
 import { createLogger } from '@/lib/logger';
 import { MediaStageProvider } from '@/lib/contexts/media-stage-context';
 import { generateMediaForOutlines } from '@/lib/media/media-orchestrator';
-import { migrateLocalAudioToR2 } from '@/lib/audio/migrate-local-audio-to-r2';
 import { preloadAudio } from '@/lib/utils/audio-player';
 
 const log = createLogger('Classroom');
@@ -75,7 +74,6 @@ export default function ClassroomDetailPage() {
   const [audioPreloadProgress, setAudioPreloadProgress] = useState({ loaded: 0, total: 0 });
 
   const generationStartedRef = useRef(false);
-  const audioMigrationStartedRef = useRef(false);
   const loadAbortRef = useRef<AbortController | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -311,7 +309,6 @@ export default function ClassroomDetailPage() {
     setError(null);
     setRetryCount(0);
     generationStartedRef.current = false;
-    audioMigrationStartedRef.current = false;
 
     const mediaStore = useMediaGenerationStore.getState();
     mediaStore.revokeObjectUrls();
@@ -403,34 +400,7 @@ export default function ClassroomDetailPage() {
     log.info(`[Classroom] Preloading ${audioIds.size} audio files (fallback)`);
   }, [loading, error]);
 
-  // Auto-migrate legacy local-only TTS audio to R2 in the background once the classroom is ready.
-  useEffect(() => {
-    if (loading || error || audioMigrationStartedRef.current) return;
-    if (typeof window === 'undefined') return;
-
-    const stage = useStageStore.getState().stage;
-    if (!stage?.id) return;
-
-    const sessionKey = `audio-migration:auto:${stage.id}`;
-    if (window.sessionStorage.getItem(sessionKey) === 'done') {
-      audioMigrationStartedRef.current = true;
-      return;
-    }
-
-    audioMigrationStartedRef.current = true;
-
-    migrateLocalAudioToR2((progress) => {
-      log.info('[Classroom] Auto audio migration progress:', progress);
-    })
-      .then((result) => {
-        log.info('[Classroom] Auto audio migration finished:', result);
-        window.sessionStorage.setItem(sessionKey, 'done');
-      })
-      .catch((migrationErr) => {
-        log.warn('[Classroom] Auto audio migration failed:', migrationErr);
-        audioMigrationStartedRef.current = false;
-      });
-  }, [loading, error]);
+  // Audio preloading is handled in the loadClassroom function above
 
   const handleManualRetry = useCallback(() => {
     setLoading(true);
@@ -438,7 +408,6 @@ export default function ClassroomDetailPage() {
     setRetryCount(0);
     setTimedOut(false);
     generationStartedRef.current = false;
-    audioMigrationStartedRef.current = false;
     loadClassroom(0);
   }, [loadClassroom]);
 
