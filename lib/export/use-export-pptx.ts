@@ -547,24 +547,28 @@ async function buildPptxBlob(
 
       // ── IMAGE ──
       else if (el.type === 'image') {
+        totalImages++; // Count all image elements we attempt to process
+        log.debug(`[PPT-IMG] Processing image element #${totalImages}: el.src="${el.src}", id="${el.id}"`);
+        
         // Resolve placeholder src → actual image data
         let resolvedSrc = el.src;
-        
-        // DIAGNOSTIC: Log image element details
-        log.debug(`[PPT-IMG] Processing image element: el.src="${el.src}", id="${el.id}"`);
         
         if (isMediaPlaceholder(el.src)) {
           log.debug(`[PPT-IMG] Is media placeholder, checking sources...`);
           
           // Priority 1: in-memory Zustand store (current session)
           const task = useMediaGenerationStore.getState().tasks[el.src];
-          log.debug(`[PPT-IMG] Zustand task: ${task ? `status=${task.status}, objectUrl=${!!task.objectUrl}` : 'NOT FOUND'}`);
+          log.debug(`[PPT-IMG] Zustand task: ${task ? `status=${task.status}, objectUrl=${!!task.objectUrl}, hasResult=${!!task.result}` : 'NOT FOUND'}`);
           
           if (task?.status === 'done' && task.objectUrl) {
             resolvedSrc = task.objectUrl;
             resolvedFromZustand++;
             log.debug(`[PPT-IMG] ✓ Resolved from Zustand: ${resolvedSrc.substring(0, 80)}...`);
           } else {
+            // Log why Zustand didn't resolve
+            if (task) {
+              log.debug(`[PPT-IMG] Zustand task found but not usable: status=${task.status}, objectUrl=${!!task.objectUrl}`);
+            }
             // Priority 2: IndexedDB (restored from server-side storage)
             // Use the passed stageId parameter (from hook) instead of from store
             const effectiveStageId = stageId || useStageStore.getState().stage?.id;
@@ -1218,13 +1222,29 @@ async function buildPptxBlob(
 
   // Image resolution summary
   log.info(`[PPT-IMG] === Image Resolution Summary ===`);
-  log.info(`[PPT-IMG] Total images processed: ${totalImages}`);
+  log.info(`[PPT-IMG] Stage ID: ${stageId || 'UNDEFINED'}`);
+  log.info(`[PPT-IMG] Total images in slides: ${totalImages}`);
   log.info(`[PPT-IMG]   - Resolved from Zustand: ${resolvedFromZustand}`);
   log.info(`[PPT-IMG]   - Resolved from IndexedDB: ${resolvedFromIndexedDB}`);
   log.info(`[PPT-IMG]   - Static (not placeholder): ${resolvedFromStatic}`);
   log.info(`[PPT-IMG]   - Skipped (no source): ${skippedNoSource}`);
   log.info(`[PPT-IMG]   - Fetch succeeded: ${fetchSucceeded}`);
   log.info(`[PPT-IMG]   - Fetch failed: ${fetchFailed}`);
+  
+  // Log store state for debugging
+  const zustandTasks = useMediaGenerationStore.getState().tasks;
+  const placeholderKeys = Object.keys(zustandTasks).filter(k => isMediaPlaceholder(k));
+  log.info(`[PPT-IMG] Zustand has ${placeholderKeys.length} placeholder tasks: ${placeholderKeys.join(', ')}`);
+  
+  // Log IndexedDB state
+  if (stageId) {
+    const dbKeys = await db.mediaFiles.where('stageId').equals(stageId).toArray();
+    log.info(`[PPT-IMG] IndexedDB has ${dbKeys.length} media records for stage ${stageId}`);
+    for (const rec of dbKeys) {
+      const elementId = rec.id.includes(':') ? rec.id.split(':').slice(1).join(':') : rec.id;
+      log.info(`[PPT-IMG]   - ${elementId}: ossKey=${rec.ossKey ? 'present' : 'MISSING'}, error=${rec.error || 'none'}`);
+    }
+  }
   log.info(`[PPT-IMG] =================================`);
 
   return (await pptx.write({ outputType: 'blob' })) as Blob;
