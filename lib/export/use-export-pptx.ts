@@ -383,8 +383,10 @@ async function buildPptxBlob(
   viewportSize: number,
   ratioPx2Inch: number,
   ratioPx2Pt: number,
+  stageId?: string,
 ): Promise<Blob> {
   const pptx = new pptxgen();
+  log.info(`[PPT-IMG] buildPptxBlob called with stageId: ${stageId || 'UNDEFINED'}`);
   
   // Image resolution statistics for diagnostics
   let totalImages = 0;
@@ -429,17 +431,18 @@ async function buildPptxBlob(
           // Resolve background placeholder
           log.debug(`[PPT-BG] Background is media placeholder: "${bg.image.src}"`);
           let resolvedBgSrc = bg.image.src;
-          
+
           // Priority 1: Zustand
           const task = useMediaGenerationStore.getState().tasks[bg.image.src];
           if (task?.status === 'done' && task.objectUrl) {
             resolvedBgSrc = task.objectUrl;
             log.debug(`[PPT-BG] ✓ Resolved from Zustand`);
           } else {
-            // Priority 2: IndexedDB
-            const stageId = useStageStore.getState().stage?.id;
-            if (stageId) {
-              const dbKey = mediaFileKey(stageId, bg.image.src);
+            // Priority 2: IndexedDB - use passed stageId parameter
+            const effectiveStageId = stageId || useStageStore.getState().stage?.id;
+            log.debug(`[PPT-BG] Stage ID: passed=${stageId || 'NONE'}, effective=${effectiveStageId || 'UNDEFINED'}`);
+            if (effectiveStageId) {
+              const dbKey = mediaFileKey(effectiveStageId, bg.image.src);
               const record = await db.mediaFiles.get(dbKey).catch(() => undefined);
               if (record?.ossKey) {
                 resolvedBgSrc = record.ossKey;
@@ -563,11 +566,12 @@ async function buildPptxBlob(
             log.debug(`[PPT-IMG] ✓ Resolved from Zustand: ${resolvedSrc.substring(0, 80)}...`);
           } else {
             // Priority 2: IndexedDB (restored from server-side storage)
-            const stageId = useStageStore.getState().stage?.id;
-            log.debug(`[PPT-IMG] Stage ID from store: ${stageId || 'UNDEFINED'}`);
+            // Use the passed stageId parameter (from hook) instead of from store
+            const effectiveStageId = stageId || useStageStore.getState().stage?.id;
+            log.debug(`[PPT-IMG] Stage ID: passed=${stageId || 'NONE'}, fromStore=${useStageStore.getState().stage?.id || 'UNDEFINED'}, effective=${effectiveStageId || 'UNDEFINED'}`);
             
-            if (stageId) {
-              const dbKey = mediaFileKey(stageId, el.src);
+            if (effectiveStageId) {
+              const dbKey = mediaFileKey(effectiveStageId, el.src);
               log.debug(`[PPT-IMG] IndexedDB lookup: key="${dbKey}"`);
               
               const record = await db.mediaFiles.get(dbKey).catch((e) => {
@@ -584,7 +588,7 @@ async function buildPptxBlob(
               } else {
                 // Priority 3: Try to find by elementId directly
                 log.debug(`[PPT-IMG] Trying elementId lookup in mediaFiles table...`);
-                const allMedia = await db.mediaFiles.where('stageId').equals(stageId).toArray();
+                const allMedia = await db.mediaFiles.where('stageId').equals(effectiveStageId).toArray();
                 log.debug(`[PPT-IMG] Total media records for stage: ${allMedia.length}`);
                 
                 for (const m of allMedia) {
@@ -1276,6 +1280,7 @@ export function useExportPPTX() {
         viewportSize,
         ratioPx2Inch,
         ratioPx2Pt,
+        stage?.id,
       );
 
       const pptFileName = `${fileName}.pptx`;
@@ -1319,6 +1324,7 @@ export function useExportPPTX() {
         viewportSize,
         ratioPx2Inch,
         ratioPx2Pt,
+        stage?.id,
       );
       zip.file(`${fileName}.pptx`, pptxBlob);
 
