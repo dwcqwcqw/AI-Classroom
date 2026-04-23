@@ -558,7 +558,7 @@ async function buildPptxBlob(
           
           // Priority 1: in-memory Zustand store (current session)
           const task = useMediaGenerationStore.getState().tasks[el.src];
-          log.debug(`[PPT-IMG] Zustand task: ${task ? `status=${task.status}, objectUrl=${!!task.objectUrl}, hasResult=${!!task.result}` : 'NOT FOUND'}`);
+          log.debug(`[PPT-IMG] Zustand task: ${task ? `status=${task.status}, objectUrl=${!!task.objectUrl}` : 'NOT FOUND'}`);
           
           if (task?.status === 'done' && task.objectUrl) {
             resolvedSrc = task.objectUrl;
