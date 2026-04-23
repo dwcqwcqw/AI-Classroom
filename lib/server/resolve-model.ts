@@ -10,6 +10,22 @@ import { getModel, parseModelString, type ModelWithInfo } from '@/lib/ai/provide
 import { resolveApiKey, resolveBaseUrl, resolveProxy } from '@/lib/server/provider-config';
 import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
 
+/**
+ * Base64 decode helper for headers that may contain non-ISO-8859-1 characters
+ * (e.g. Chinese in model names, custom base URLs).
+ *
+ * Client encodes with: btoa(unescape(encodeURIComponent(value)))
+ * Server must decode with: decodeURIComponent(escape(atob(value)))
+ */
+function decodeHeaderValue(value: string | null): string | undefined {
+  if (!value) return undefined;
+  try {
+    return decodeURIComponent(escape(atob(value)));
+  } catch {
+    return value;
+  }
+}
+
 export interface ResolvedModel extends ModelWithInfo {
   /** Original model string (e.g. "openai/gpt-4o-mini") */
   modelString: string;
@@ -67,12 +83,14 @@ export async function resolveModel(params: {
  * Reads: x-model, x-api-key, x-base-url, x-provider-type
  * Note: requiresApiKey is derived server-side from the provider registry,
  * never from client headers, to prevent auth bypass.
+ *
+ * Headers are decoded using Base64 to support non-ASCII characters.
  */
 export async function resolveModelFromHeaders(req: NextRequest): Promise<ResolvedModel> {
   return resolveModel({
-    modelString: req.headers.get('x-model') || undefined,
-    apiKey: req.headers.get('x-api-key') || undefined,
-    baseUrl: req.headers.get('x-base-url') || undefined,
+    modelString: decodeHeaderValue(req.headers.get('x-model')) || undefined,
+    apiKey: decodeHeaderValue(req.headers.get('x-api-key')) || undefined,
+    baseUrl: decodeHeaderValue(req.headers.get('x-base-url')) || undefined,
     providerType: req.headers.get('x-provider-type') || undefined,
   });
 }
