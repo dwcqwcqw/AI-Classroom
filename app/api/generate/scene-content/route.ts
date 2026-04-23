@@ -148,12 +148,23 @@ export async function POST(req: NextRequest) {
     });
 
     if (!content) {
-      log.error(`Failed to generate content for: "${effectiveOutline.title}"`);
+      log.error(`Failed to generate content for: "${effectiveOutline.title}" (type: ${effectiveOutline.type})`);
+
+      // Provide more specific error messages based on scene type
+      let errorHint = '';
+      if (effectiveOutline.type === 'interactive') {
+        if (!effectiveOutline.widgetType) {
+          errorHint = ' - Missing widgetType for interactive scene';
+        } else {
+          errorHint = ` - Widget type: ${effectiveOutline.widgetType}`;
+        }
+      }
 
       return apiError(
         'GENERATION_FAILED',
         500,
-        `Failed to generate content: ${effectiveOutline.title}`,
+        `Failed to generate content: ${effectiveOutline.title}${errorHint}`,
+        `Scene type: ${effectiveOutline.type}, widgetType: ${effectiveOutline.widgetType || 'N/A'}`,
       );
     }
 

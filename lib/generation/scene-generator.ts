@@ -1041,12 +1041,17 @@ async function generateWidgetContent(
 
   log.info(`Generating ${widgetType} widget for: ${outline.title}`);
   const response = await aiCall(prompts.system, prompts.user);
+  log.debug(`Widget response preview: ${response.substring(0, 500)}...`);
+
   const html = extractHtml(response);
 
   if (!html) {
     log.error(`Failed to extract HTML from ${widgetType} response for: ${outline.title}`);
+    log.error(`Full response: ${response}`);
     return null;
   }
+
+  log.debug(`Extracted HTML length: ${html.length} chars`);
 
   // Extract widget config from HTML if present
   const widgetConfig = extractWidgetConfig(html);
