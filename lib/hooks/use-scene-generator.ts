@@ -54,10 +54,11 @@ function sleep(ms: number): Promise<void> {
 function withTimeout(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(new Error(`Request timed out after ${timeoutMs}ms`)), timeoutMs);
-  // Forward parent abort
+  // Forward parent abort with a default reason if none provided
   signal?.addEventListener('abort', () => {
     clearTimeout(timer);
-    controller.abort(signal.reason);
+    // Use provided reason or a default message to avoid "aborted without reason" errors
+    controller.abort(signal.reason || 'Request was aborted by the caller');
   });
   // Clear timer when our own signal fires (no double-fire)
   controller.signal.addEventListener('abort', () => clearTimeout(timer));
