@@ -13,6 +13,7 @@ import type { TTSProviderId } from '@/lib/audio/types';
 import { splitLongSpeechActions } from '@/lib/audio/tts-utils';
 import { generateMediaForOutlines } from '@/lib/media/media-orchestrator';
 import { createLogger } from '@/lib/logger';
+import { encodeHeader } from '@/lib/utils/api-headers';
 
 const log = createLogger('SceneGenerator');
 
@@ -85,21 +86,21 @@ function getApiHeaders(): HeadersInit {
 
   return {
     'Content-Type': 'application/json',
-    'x-model': config.modelString || '',
-    'x-api-key': config.apiKey || '',
-    'x-base-url': config.baseUrl || '',
+    'x-model': encodeHeader(config.modelString || ''),
+    'x-api-key': encodeHeader(config.apiKey || ''),
+    'x-base-url': encodeHeader(config.baseUrl || ''),
     'x-provider-type': config.providerType || '',
     'x-requires-api-key': String(config.requiresApiKey ?? false),
     // Image generation provider
-    'x-image-provider': settings.imageProviderId || '',
-    'x-image-model': settings.imageModelId || '',
-    'x-image-api-key': imageProviderConfig?.apiKey || '',
-    'x-image-base-url': imageProviderConfig?.baseUrl || '',
+    'x-image-provider': encodeHeader(settings.imageProviderId || ''),
+    'x-image-model': encodeHeader(settings.imageModelId || ''),
+    'x-image-api-key': encodeHeader(imageProviderConfig?.apiKey || ''),
+    'x-image-base-url': encodeHeader(imageProviderConfig?.baseUrl || ''),
     // Video generation provider
-    'x-video-provider': settings.videoProviderId || '',
-    'x-video-model': settings.videoModelId || '',
-    'x-video-api-key': videoProviderConfig?.apiKey || '',
-    'x-video-base-url': videoProviderConfig?.baseUrl || '',
+    'x-video-provider': encodeHeader(settings.videoProviderId || ''),
+    'x-video-model': encodeHeader(settings.videoModelId || ''),
+    'x-video-api-key': encodeHeader(videoProviderConfig?.apiKey || ''),
+    'x-video-base-url': encodeHeader(videoProviderConfig?.baseUrl || ''),
     // Media generation toggles
     'x-image-generation-enabled': String(settings.imageGenerationEnabled ?? false),
     'x-video-generation-enabled': String(settings.videoGenerationEnabled ?? false),

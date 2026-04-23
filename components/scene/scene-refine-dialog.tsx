@@ -16,6 +16,7 @@ import { getCurrentModelConfig } from '@/lib/utils/model-config';
 import { useSettingsStore } from '@/lib/store/settings';
 import { useStageStore } from '@/lib/store/stage';
 import { createLogger } from '@/lib/logger';
+import { encodeHeader } from '@/lib/utils/api-headers';
 import type { Scene } from '@/lib/types/stage';
 
 const log = createLogger('SceneRefineDialog');
@@ -75,19 +76,19 @@ export function SceneRefineDialog({ scene, stageInfo, onClose }: SceneRefineDial
     const videoProviderConfig = settings.videoProvidersConfig?.[settings.videoProviderId];
     return {
       'Content-Type': 'application/json',
-      'x-model': modelConfig.modelString || '',
-      'x-api-key': modelConfig.apiKey || '',
-      'x-base-url': modelConfig.baseUrl || '',
+      'x-model': encodeHeader(modelConfig.modelString || ''),
+      'x-api-key': encodeHeader(modelConfig.apiKey || ''),
+      'x-base-url': encodeHeader(modelConfig.baseUrl || ''),
       'x-provider-type': modelConfig.providerType || '',
       'x-requires-api-key': String(modelConfig.requiresApiKey ?? false),
-      'x-image-provider': settings.imageProviderId || '',
-      'x-image-model': settings.imageModelId || '',
-      'x-image-api-key': imageProviderConfig?.apiKey || '',
-      'x-image-base-url': imageProviderConfig?.baseUrl || '',
-      'x-video-provider': settings.videoProviderId || '',
-      'x-video-model': settings.videoModelId || '',
-      'x-video-api-key': videoProviderConfig?.apiKey || '',
-      'x-video-base-url': videoProviderConfig?.baseUrl || '',
+      'x-image-provider': encodeHeader(settings.imageProviderId || ''),
+      'x-image-model': encodeHeader(settings.imageModelId || ''),
+      'x-image-api-key': encodeHeader(imageProviderConfig?.apiKey || ''),
+      'x-image-base-url': encodeHeader(imageProviderConfig?.baseUrl || ''),
+      'x-video-provider': encodeHeader(settings.videoProviderId || ''),
+      'x-video-model': encodeHeader(settings.videoModelId || ''),
+      'x-video-api-key': encodeHeader(videoProviderConfig?.apiKey || ''),
+      'x-video-base-url': encodeHeader(videoProviderConfig?.baseUrl || ''),
       'x-image-generation-enabled': String(settings.imageGenerationEnabled ?? false),
       'x-video-generation-enabled': String(settings.videoGenerationEnabled ?? false),
     };

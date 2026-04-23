@@ -20,6 +20,7 @@ import {
   storeImages,
 } from '@/lib/utils/image-storage';
 import { getCurrentModelConfig } from '@/lib/utils/model-config';
+import { encodeHeader } from '@/lib/utils/api-headers';
 import { db } from '@/lib/utils/database';
 import { MAX_PDF_CONTENT_CHARS, MAX_VISION_IMAGES } from '@/lib/constants/generation';
 import { nanoid } from 'nanoid';
@@ -95,15 +96,6 @@ function GenerationPreviewContent() {
     const settings = useSettingsStore.getState();
     const imageProviderConfig = settings.imageProvidersConfig?.[settings.imageProviderId];
     const videoProviderConfig = settings.videoProvidersConfig?.[settings.videoProviderId];
-    // Base64 encode header values that may contain non-ISO-8859-1 characters (e.g. Chinese in model names)
-    // Server will decode these headers to recover the original values
-    const encodeHeader = (v: string) => {
-      try {
-        return btoa(unescape(encodeURIComponent(v)));
-      } catch {
-        return v.replace(/[^\x20-\x7E]/g, '');
-      }
-    };
     return {
       'Content-Type': 'application/json',
       'x-model': encodeHeader(modelConfig.modelString),
