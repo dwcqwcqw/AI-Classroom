@@ -51,16 +51,37 @@ function getCachedBuffer(audioId: string): AudioBuffer | null {
   return audioCache.get(audioId)?.buffer ?? null;
 }
 
-/** Fetch + decode a single audioId and store in cache. Returns the buffer (or null). */
+/** Fetch + decode a single audioId and store in cache. Returns the buffer (or null).
+ *  If audioUrl is provided, it is used as a fallback when the IndexedDB ossKey lookup fails.
+ */
 async function fetchAndDecode(
   audioId: string,
   signal?: AbortSignal,
+  audioUrl?: string,
 ): Promise<{ id: string; buffer: AudioBuffer | null }> {
   const cached = getCachedBuffer(audioId);
   if (cached) return { id: audioId, buffer: cached };
 
   const record = await db.audioFiles.get(audioId).catch(() => undefined);
-  if (!record?.ossKey) return { id: audioId, buffer: null };
+  if (!record?.ossKey) {
+    // IndexedDB miss: try audioUrl fallback (server-loaded classrooms store audioUrl on actions)
+    if (!audioUrl) return { id: audioId, buffer: null };
+    let bytes: ArrayBuffer;
+    try {
+      bytes = await fetchAudioBytes(audioUrl, signal);
+    } catch {
+      return { id: audioId, buffer: null };
+    }
+    const ctx = getAudioContext();
+    if (!ctx) return { id: audioId, buffer: null };
+    try {
+      const buffer = await ctx.decodeAudioData(bytes.slice(0));
+      cacheAudioBuffer(audioId, buffer);
+      return { id: audioId, buffer };
+    } catch {
+      return { id: audioId, buffer: null };
+    }
+  }
 
   let bytes: ArrayBuffer;
   try {
@@ -86,6 +107,9 @@ async function fetchAndDecode(
  * Call this as early as possible — even while scenes are still loading from server.
  *
  * @param audioIds       Array of audioId strings to prefetch. Duplicates are ignored.
+ * @param options.audioUrls  Optional map of audioId → audioUrl, used as fallback when
+ *                          IndexedDB lookup fails (for server-loaded classrooms where audioUrl
+ *                          is stored on the action but not in local IndexedDB).
  * @param options.concurrency  Max simultaneous fetches. Default 8.
  * @param options.signal       AbortSignal to cancel in-flight requests on page unload.
  * @param options.onProgress   Called each time an audio finishes: (loaded, total).
@@ -94,10 +118,12 @@ async function fetchAndDecode(
 export function preloadAudio(
   audioIds: string[],
   {
+    audioUrls,
     concurrency = 8,
     signal,
     onProgress,
   }: {
+    audioUrls?: Record<string, string>;
     concurrency?: number;
     signal?: AbortSignal;
     onProgress?: (loaded: number, total: number) => void;
@@ -117,7 +143,7 @@ export function preloadAudio(
     while (queue.length > 0) {
       if (signal?.aborted) break;
       const id = queue.shift()!;
-      await fetchAndDecode(id, signal).catch(() => {});
+      await fetchAndDecode(id, signal, audioUrls?.[id]).catch(() => {});
       if (signal?.aborted) break;
       loaded++;
       onProgress?.(loaded, total);

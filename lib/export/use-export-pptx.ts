@@ -10,6 +10,7 @@ import { useStageStore } from '@/lib/store';
 import { useCanvasStore } from '@/lib/store/canvas';
 import { useMediaGenerationStore, isMediaPlaceholder } from '@/lib/store/media-generation';
 import { useI18n } from '@/lib/hooks/use-i18n';
+import { db, mediaFileKey } from '@/lib/utils/database';
 import type {
   Slide,
   PPTElementOutline,
@@ -486,11 +487,23 @@ async function buildPptxBlob(
         // Resolve placeholder src → actual image data
         let resolvedSrc = el.src;
         if (isMediaPlaceholder(el.src)) {
+          // Priority 1: in-memory Zustand store (current session)
           const task = useMediaGenerationStore.getState().tasks[el.src];
           if (task?.status === 'done' && task.objectUrl) {
             resolvedSrc = task.objectUrl;
           } else {
-            continue; // Media not ready, skip
+            // Priority 2: IndexedDB (restored from server-side storage)
+            const stageId = useStageStore.getState().stage?.id;
+            if (stageId) {
+              const dbKey = mediaFileKey(stageId, el.src);
+              const record = await db.mediaFiles.get(dbKey).catch(() => undefined);
+              if (record?.ossKey) {
+                resolvedSrc = record.ossKey;
+              }
+            }
+            if (resolvedSrc === el.src) {
+              continue; // Media not ready, skip
+            }
           }
         }
 

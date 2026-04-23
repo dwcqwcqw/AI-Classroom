@@ -238,10 +238,14 @@ export default function ClassroomDetailPage() {
         // ── Audio preloading: start as early as possible with abort signal ──
         const { scenes } = useStageStore.getState();
         const audioIds: string[] = [];
+        const audioUrls: Record<string, string> = {};
         for (const scene of scenes) {
           for (const action of scene.actions ?? []) {
             if (action.type === 'speech' && action.audioId) {
               audioIds.push(action.audioId);
+              if (action.audioUrl) {
+                audioUrls[action.audioId] = action.audioUrl;
+              }
             }
           }
         }
@@ -252,6 +256,7 @@ export default function ClassroomDetailPage() {
 
           // Fire-and-forget preload — runs in background while user starts interacting
           preloadAudio(audioIds, {
+            audioUrls,
             concurrency: 8,
             signal: abort.signal,
             onProgress: (loaded, total) => {
@@ -373,10 +378,14 @@ export default function ClassroomDetailPage() {
     if (!scenes.length) return;
 
     const audioIds = new Set<string>();
+    const audioUrls: Record<string, string> = {};
     for (const scene of scenes) {
       for (const action of scene.actions ?? []) {
         if (action.type === 'speech' && action.audioId) {
           audioIds.add(action.audioId);
+          if (action.audioUrl) {
+            audioUrls[action.audioId] = action.audioUrl;
+          }
         }
       }
     }
@@ -384,7 +393,7 @@ export default function ClassroomDetailPage() {
     if (audioIds.size === 0) return;
 
     // Fire-and-forget: preload in background, up to 8 concurrent fetches
-    preloadAudio([...audioIds], { concurrency: 8 });
+    preloadAudio([...audioIds], { audioUrls, concurrency: 8 });
     log.info(`[Classroom] Preloading ${audioIds.size} audio files (fallback)`);
   }, [loading, error]);
 
