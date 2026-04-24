@@ -885,7 +885,8 @@
     "webSearchApiKeyHint": "Get an API key from tavily.com for web search",
     "webSearchBaseUrl": "Base URL",
     "webSearchServerConfigured": "Server-side Tavily API key is configured",
-    "optional": "Optional"
+    "optional": "Optional",
+    "webPreviewEnterUrl": "Enter URL..."
   },
   "profile": {
     "title": "Profile",

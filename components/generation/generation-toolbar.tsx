@@ -284,7 +284,7 @@ export function GenerationToolbar({
             <button className={webSearch ? pillActive : pillMuted}>
               <Globe2 className={cn('size-3.5', webSearch && 'animate-pulse')} />
               {webSearch && (
-                <span>{WEB_SEARCH_PROVIDERS[webSearchProviderId]?.name || 'Search'}</span>
+                <span>{WEB_SEARCH_PROVIDERS[webSearchProviderId]?.name || t('generation.webSearching')}</span>
               )}
             </button>
           </PopoverTrigger>

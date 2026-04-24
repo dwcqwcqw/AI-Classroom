@@ -885,7 +885,8 @@
     "webSearchApiKeyHint": "从 tavily.com 获取 API Key，用于网络搜索",
     "webSearchBaseUrl": "接口地址",
     "webSearchServerConfigured": "服务端已配置 Tavily API Key",
-    "optional": "可选"
+    "optional": "可选",
+    "webPreviewEnterUrl": "输入网址..."
   },
   "profile": {
     "title": "个人资料",
