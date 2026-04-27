@@ -24,6 +24,7 @@ import { ElementCreateSelection } from './ElementCreateSelection';
 import { ShapeCreateCanvas } from './ShapeCreateCanvas';
 import { Ruler } from './Ruler';
 import { GridLines } from './GridLines';
+import { ElementEditPanel } from '../ElementEditPanel';
 import type { PPTElement } from '@/lib/types/slides';
 import type { AlignmentLineProps } from '@/lib/types/edit';
 import type { ContextmenuItem } from './EditableElement';
@@ -349,6 +350,9 @@ export function Canvas(_props: CanvasProps) {
 
           {/* TODO: Add LinkDialog modal */}
           {linkDialogVisible && <div>LinkDialog placeholder</div>}
+
+          {/* Element Edit Panel */}
+          <ElementEditPanel />
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent>
