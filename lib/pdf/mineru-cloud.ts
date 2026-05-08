@@ -3,10 +3,16 @@
  *
  * Flow: POST /file-urls/batch → PUT presigned URL → poll /extract-results/batch/{id} → download ZIP
  * ZIP contains: full.md + images/ + content_list.json
+ *
+ * 与官网「精准解析」一致：支持 `model_version`、`enable_formula` / `enable_table`、
+ * `files[].is_ocr`、`files[].page_ranges` 等（单文件 URL 任务为 POST /extract/task，本实现走批量本地上传）。
  */
 
+import http from 'node:http';
+import https from 'node:https';
+import { URL } from 'node:url';
 import JSZip from 'jszip';
-import type { PDFParserConfig } from './types';
+import type { MinerUCloudModelVersion, PDFParserConfig } from './types';
 import type { ParsedPdfContent } from '@/lib/types/pdf';
 import { extractMinerUResult } from './mineru-parser';
 import { MINERU_CLOUD_DEFAULT_BASE } from './constants';
@@ -20,6 +26,104 @@ const TIMEOUTS = {
   poll: 30_000,
   zip: 180_000,
 } as const;
+
+/**
+ * Presigned OSS PUT for large PDFs can take several minutes on slow uplinks.
+ * Abort too early surfaces as undici `fetch failed`.
+ */
+function presignedUploadTimeoutMs(byteLength: number): number {
+  const mb = byteLength / (1024 * 1024);
+  const scaled = TIMEOUTS.upload + Math.floor(mb / 8) * 60_000;
+  return Math.min(20 * 60 * 1000, Math.max(TIMEOUTS.upload, scaled));
+}
+
+const PRESIGNED_PUT_CHUNK_BYTES = 1024 * 1024;
+
+/**
+ * PUT entire buffer to MinerU/OSS presigned URL using Node core `http(s).request`.
+ * Undici `fetch` on large/long uploads often fails with opaque `TypeError: fetch failed`;
+ * native client is more reliable for multi‑minute uploads.
+ *
+ * Do not set Content-Type — many presigned URLs forbid extra signed headers.
+ */
+function putPresignedBuffer(presignedUrl: string, body: Buffer, timeoutMs: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const done = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      fn();
+    };
+
+    let url: URL;
+    try {
+      url = new URL(presignedUrl);
+    } catch (e) {
+      reject(new Error(`Invalid presigned URL: ${e instanceof Error ? e.message : String(e)}`));
+      return;
+    }
+
+    const isHttps = url.protocol === 'https:';
+    const lib = isHttps ? https : http;
+    const defaultPort = isHttps ? 443 : 80;
+    const port = url.port ? Number(url.port) : defaultPort;
+
+    const req = lib.request(
+      {
+        protocol: url.protocol,
+        hostname: url.hostname,
+        port,
+        path: `${url.pathname}${url.search}`,
+        method: 'PUT',
+        headers: {
+          'Content-Length': String(body.length),
+        },
+        timeout: timeoutMs,
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => {
+          const code = res.statusCode ?? 0;
+          if (code >= 200 && code < 300) {
+            done(() => resolve());
+            return;
+          }
+          const text = Buffer.concat(chunks).toString('utf8').slice(0, 600);
+          done(() =>
+            reject(
+              new Error(
+                `Presigned PUT failed HTTP ${code}: ${text || res.statusMessage || 'no body'}`,
+              ),
+            ),
+          );
+        });
+      },
+    );
+
+    req.on('error', (err) => done(() => reject(err)));
+    req.on('timeout', () => {
+      req.destroy(new Error(`Presigned PUT timed out after ${timeoutMs}ms`));
+    });
+
+    let offset = 0;
+    const writeNext = (): void => {
+      while (offset < body.length) {
+        const end = Math.min(offset + PRESIGNED_PUT_CHUNK_BYTES, body.length);
+        const slice = body.subarray(offset, end);
+        const ok = req.write(slice);
+        offset = end;
+        if (!ok) {
+          req.once('drain', writeNext);
+          return;
+        }
+      }
+      req.end();
+    };
+
+    writeNext();
+  });
+}
 
 const POLL_INTERVAL_MS = 2_500;
 const POLL_MAX_MS = 15 * 60 * 1_000; // 15 minutes
@@ -41,9 +145,16 @@ function extToMime(ext: string): string {
 function isRetryable(err: unknown): boolean {
   if (!(err instanceof Error)) return false;
   const msg = err.message.toLowerCase();
-  return ['fetch failed', 'econnreset', 'etimedout', 'timeout', 'aborted'].some((s) =>
-    msg.includes(s),
-  );
+  return [
+    'fetch failed',
+    'econnreset',
+    'etimedout',
+    'timeout',
+    'aborted',
+    'socket hang up',
+    'presigned put timed out',
+    'network error',
+  ].some((s) => msg.includes(s));
 }
 
 async function fetchWithRetry<T>(fn: () => Promise<T>, context: string, attempts = 4): Promise<T> {
@@ -229,6 +340,19 @@ export async function parseWithMinerUCloud(
 
   log.info(`[MinerU Cloud] Starting parse: ${uploadFileName} (${pdfBuffer.byteLength} bytes)`);
 
+  const modelVersion: MinerUCloudModelVersion = config.mineruModelVersion || 'vlm';
+  const isOcr = config.mineruIsOcr !== false;
+  const fileEntry: {
+    name: string;
+    is_ocr?: boolean;
+    page_ranges?: string;
+  } = {
+    name: uploadFileName,
+    is_ocr: isOcr,
+  };
+  const ranges = config.mineruPageRanges?.trim();
+  if (ranges) fileEntry.page_ranges = ranges;
+
   // Step 1: Create batch — request presigned upload URL
   const batchData = await fetchWithRetry(async () => {
     const res = await fetch(`${apiRoot}/file-urls/batch`, {
@@ -238,10 +362,10 @@ export async function parseWithMinerUCloud(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        files: [{ name: uploadFileName }],
+        files: [fileEntry],
         enable_formula: true,
         enable_table: true,
-        model_version: 'vlm',
+        model_version: modelVersion,
         language: 'ch',
       }),
       signal: AbortSignal.timeout(TIMEOUTS.batch),
@@ -257,29 +381,18 @@ export async function parseWithMinerUCloud(
     throw new Error('MinerU Cloud batch response missing batch_id or upload URLs');
   }
 
-  log.info(`[MinerU Cloud] Batch ${batchData.batch_id} created, uploading PDF...`);
-
-  // Step 2: Upload PDF to presigned URL
-  const putRes = await fetchWithRetry(
-    () =>
-      fetch(uploadUrls[0], {
-        method: 'PUT',
-        body: new Blob([
-          pdfBuffer.buffer.slice(
-            pdfBuffer.byteOffset,
-            pdfBuffer.byteOffset + pdfBuffer.byteLength,
-          ) as ArrayBuffer,
-        ]),
-        signal: AbortSignal.timeout(TIMEOUTS.upload),
-        // No Content-Type — presigned OSS URLs are sensitive to headers in the signature
-      }),
-    'presigned upload',
-    5,
+  const uploadTimeoutMs = presignedUploadTimeoutMs(pdfBuffer.byteLength);
+  log.info(
+    `[MinerU Cloud] Batch ${batchData.batch_id} created, uploading PDF (${(pdfBuffer.byteLength / (1024 * 1024)).toFixed(2)} MiB, upload timeout ${Math.round(uploadTimeoutMs / 1000)}s)...`,
   );
-  if (!putRes.ok) {
-    const text = await putRes.text().catch(() => putRes.statusText);
-    throw new Error(`MinerU Cloud upload failed (${putRes.status}): ${text.slice(0, 400)}`);
-  }
+
+  // Step 2: Upload PDF to presigned URL (native https — avoids undici fetch large‑body failures)
+  const putBody = Buffer.from(pdfBuffer);
+  await fetchWithRetry(
+    () => putPresignedBuffer(uploadUrls[0], putBody, uploadTimeoutMs),
+    'presigned upload',
+    7,
+  );
 
   // Give the backend a moment to register the upload
   await sleep(1_500);

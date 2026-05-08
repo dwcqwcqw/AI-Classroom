@@ -24,7 +24,8 @@ import {
   formatTeacherPersonaForPrompt,
 } from '@/lib/generation/generation-pipeline';
 import type { AgentInfo } from '@/lib/generation/generation-pipeline';
-import { MAX_PDF_CONTENT_CHARS, MAX_VISION_IMAGES } from '@/lib/constants/generation';
+import { getMaxPdfContextChars, MAX_VISION_IMAGES } from '@/lib/constants/generation';
+import { excerptPdfTextForPrompt } from '@/lib/generation/pdf-context-excerpt';
 import { nanoid } from 'nanoid';
 import type {
   UserRequirements,
@@ -230,13 +231,16 @@ export async function POST(req: NextRequest) {
       ? PROMPT_IDS.INTERACTIVE_OUTLINES
       : PROMPT_IDS.REQUIREMENTS_TO_OUTLINES;
 
+    const maxPdf = getMaxPdfContextChars();
+    const pdfForPrompt = pdfText
+      ? excerptPdfTextForPrompt(pdfText, maxPdf, requirements.requirement)
+      : requirements.language === 'zh-CN'
+        ? '无'
+        : 'None';
+
     const prompts = buildPrompt(promptId, {
       requirement: effectiveRequirement,
-      pdfContent: pdfText
-        ? pdfText.substring(0, MAX_PDF_CONTENT_CHARS)
-        : requirements.language === 'zh-CN'
-          ? '无'
-          : 'None',
+      pdfContent: pdfForPrompt,
       availableImages: availableImagesText,
       researchContext: researchContext || 'None',
       mediaGenerationPolicy,

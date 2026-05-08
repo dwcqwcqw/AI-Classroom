@@ -6,6 +6,7 @@ import type {
   PdfImage,
   ImageMapping,
 } from '@/lib/types/generation';
+import type { MinerUCloudModelVersion } from '@/lib/pdf/types';
 
 // Session state stored in sessionStorage
 export interface GenerationSessionState {
@@ -21,7 +22,13 @@ export interface GenerationSessionState {
   pdfStorageKey?: string;
   pdfFileName?: string;
   pdfProviderId?: string;
-  pdfProviderConfig?: { apiKey?: string; baseUrl?: string };
+  pdfProviderConfig?: {
+    apiKey?: string;
+    baseUrl?: string;
+    isOcr?: boolean;
+    pageRanges?: string;
+    modelVersion?: MinerUCloudModelVersion;
+  };
   // Web search context
   researchContext?: string;
   researchSources?: Array<{ title: string; url: string }>;

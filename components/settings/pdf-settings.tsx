@@ -8,7 +8,15 @@ import { Button } from '@/components/ui/button';
 import { useI18n } from '@/lib/hooks/use-i18n';
 import { useSettingsStore } from '@/lib/store/settings';
 import { PDF_PROVIDERS } from '@/lib/pdf/constants';
-import type { PDFProviderId } from '@/lib/pdf/types';
+import type { MinerUCloudModelVersion, PDFProviderId } from '@/lib/pdf/types';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { CheckCircle2, Eye, EyeOff, Loader2, Zap, XCircle } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -245,6 +253,64 @@ export function PDFSettings({ selectedProviderId }: PDFSettingsProps) {
               </div>
             )}
           </div>
+
+          {isCloud && (
+            <div className="space-y-4 rounded-lg border border-border bg-muted/30 p-4">
+              <div className="flex items-start gap-3">
+                <Checkbox
+                  id="mineru-cloud-ocr"
+                  checked={providerConfig?.isOcr !== false}
+                  onCheckedChange={(v) =>
+                    setPDFProviderConfig(selectedProviderId, { isOcr: v === true })
+                  }
+                  className="mt-0.5"
+                />
+                <div className="space-y-1">
+                  <Label htmlFor="mineru-cloud-ocr" className="text-sm cursor-pointer font-medium">
+                    {t('settings.mineruCloudOcrLabel')}
+                  </Label>
+                  <p className="text-xs text-muted-foreground">{t('settings.mineruCloudOcrHint')}</p>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-sm">{t('settings.mineruCloudPageRangesLabel')}</Label>
+                <Input
+                  name="mineru-cloud-page-ranges"
+                  autoComplete="off"
+                  placeholder={t('settings.mineruCloudPageRangesPlaceholder')}
+                  value={providerConfig?.pageRanges ?? ''}
+                  onChange={(e) =>
+                    setPDFProviderConfig(selectedProviderId, { pageRanges: e.target.value })
+                  }
+                  className="text-sm font-mono"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label className="text-sm">{t('settings.mineruCloudModelVersionLabel')}</Label>
+                <Select
+                  value={providerConfig?.modelVersion ?? 'vlm'}
+                  onValueChange={(v) =>
+                    setPDFProviderConfig(selectedProviderId, {
+                      modelVersion: v as MinerUCloudModelVersion,
+                    })
+                  }
+                >
+                  <SelectTrigger className="text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="vlm">{t('settings.mineruCloudModelVlm')}</SelectItem>
+                    <SelectItem value="pipeline">{t('settings.mineruCloudModelPipeline')}</SelectItem>
+                    <SelectItem value="MinerU-HTML">
+                      {t('settings.mineruCloudModelHtml')}
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
 
           {/* Test result message */}
           {testMessage && (

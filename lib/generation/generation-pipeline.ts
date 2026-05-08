@@ -18,6 +18,7 @@ export type {
 // Prompt formatters
 export {
   buildCourseContext,
+  formatLanguageDirectiveBlock,
   formatAgentsForPrompt,
   formatTeacherPersonaForPrompt,
   formatImageDescription,

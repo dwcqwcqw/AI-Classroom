@@ -31,6 +31,7 @@ import { parseActionsFromStructuredOutput } from './action-parser';
 import { parseJsonResponse } from './json-repair';
 import {
   buildCourseContext,
+  formatLanguageDirectiveBlock,
   buildLanguageText,
   formatAgentsForPrompt,
   formatTeacherPersonaForPrompt,
@@ -906,27 +907,41 @@ async function generatePBLSceneContent(
   }
 }
 
+/** Slice a string from first `<!DOCTYPE` or `<html` through last `</html>` if both exist. */
+function sliceHtmlDocument(source: string): string | null {
+  const doctypeStart = source.indexOf('<!DOCTYPE');
+  const htmlTagStart = source.indexOf('<html');
+  let start = -1;
+  if (doctypeStart !== -1 && htmlTagStart !== -1) {
+    start = Math.min(doctypeStart, htmlTagStart);
+  } else if (doctypeStart !== -1) {
+    start = doctypeStart;
+  } else if (htmlTagStart !== -1) {
+    start = htmlTagStart;
+  }
+  if (start === -1) return null;
+  const htmlEnd = source.lastIndexOf('</html>');
+  if (htmlEnd !== -1 && htmlEnd >= start) {
+    return source.substring(start, htmlEnd + 7);
+  }
+  return null;
+}
+
 /**
  * Extract HTML document from AI response.
- * Tries to find <!DOCTYPE html>...</html> first, then falls back to code block extraction.
+ * Tries raw document first, then every markdown fence (models often put ```python before ```html).
  */
 function extractHtml(response: string): string | null {
-  // Strategy 1: Find complete HTML document
-  const doctypeStart = response.indexOf('<!DOCTYPE html>');
-  const htmlTagStart = response.indexOf('<html');
-  const start = doctypeStart !== -1 ? doctypeStart : htmlTagStart;
+  const fromRaw = sliceHtmlDocument(response);
+  if (fromRaw) return fromRaw;
 
-  if (start !== -1) {
-    const htmlEnd = response.lastIndexOf('</html>');
-    if (htmlEnd !== -1) {
-      return response.substring(start, htmlEnd + 7);
-    }
-  }
-
-  // Strategy 2: Extract from code block
-  const codeBlockMatch = response.match(/```(?:html)?\s*([\s\S]*?)```/);
-  if (codeBlockMatch) {
-    const content = codeBlockMatch[1].trim();
+  // Strategy 2: Any fenced block that contains a full HTML document (scan all fences)
+  const fenceRegex = /```[A-Za-z0-9_-]*\s*([\s\S]*?)```/g;
+  let m: RegExpExecArray | null;
+  while ((m = fenceRegex.exec(response)) !== null) {
+    const content = m[1].trim();
+    const doc = sliceHtmlDocument(content);
+    if (doc) return doc;
     if (content.includes('<html') || content.includes('<!DOCTYPE')) {
       return content;
     }
@@ -1040,10 +1055,18 @@ async function generateWidgetContent(
   }
 
   log.info(`Generating ${widgetType} widget for: ${outline.title}`);
-  const response = await aiCall(prompts.system, prompts.user);
+  let response = await aiCall(prompts.system, prompts.user);
   log.debug(`Widget response preview: ${response.substring(0, 500)}...`);
 
-  const html = extractHtml(response);
+  let html = extractHtml(response);
+
+  if (!html) {
+    const repairHint =
+      '\n\n---\n\nCRITICAL: Your previous-style answer (Markdown headings, ```python tutorials, or explanations) was invalid. Reply with ONE raw HTML document only: first line must be `<!DOCTYPE html>`, last line `</html>`. Do not wrap that document in markdown fences. Do not output a separate Python/Markdown lesson—embed starter code inside the HTML widget per the system instructions.';
+    log.warn(`No HTML extracted for "${outline.title}", retrying once with format repair hint`);
+    response = await aiCall(prompts.system, `${prompts.user}${repairHint}`);
+    html = extractHtml(response);
+  }
 
   if (!html) {
     log.error(`Failed to extract HTML from ${widgetType} response for: ${outline.title}`);
@@ -1172,6 +1195,7 @@ export async function generateSceneActions(
       courseContext: buildCourseContext(ctx),
       agents: agentsText,
       userProfile: userProfile || '',
+      languageDirective: formatLanguageDirectiveBlock(languageDirective),
     });
 
     if (!prompts) {
@@ -1200,6 +1224,7 @@ export async function generateSceneActions(
       questions: questionsText,
       courseContext: buildCourseContext(ctx),
       agents: agentsText,
+      languageDirective: formatLanguageDirectiveBlock(languageDirective),
     });
 
     if (!prompts) {
@@ -1227,6 +1252,7 @@ export async function generateSceneActions(
       designIdea: config?.designIdea || '',
       courseContext: buildCourseContext(ctx),
       agents: agentsText,
+      languageDirective: formatLanguageDirectiveBlock(languageDirective),
     });
 
     if (!prompts) {
@@ -1254,6 +1280,7 @@ export async function generateSceneActions(
       projectDescription: pblConfig?.projectDescription || outline.description,
       courseContext: buildCourseContext(ctx),
       agents: agentsText,
+      languageDirective: formatLanguageDirectiveBlock(languageDirective),
     });
 
     if (!prompts) {

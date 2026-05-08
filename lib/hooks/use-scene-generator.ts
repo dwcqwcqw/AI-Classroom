@@ -10,7 +10,13 @@ import type { AgentInfo } from '@/lib/generation/generation-pipeline';
 import type { Scene } from '@/lib/types/stage';
 import type { Action, SpeechAction } from '@/lib/types/action';
 import type { TTSProviderId } from '@/lib/audio/types';
-import { splitLongSpeechActions } from '@/lib/audio/tts-utils';
+import {
+  splitLongSpeechActions,
+  ttsSceneConcurrencyForProvider,
+  isLikelyTtsRateLimitError,
+  mimeTypeForRecordedTtsFormat,
+} from '@/lib/audio/tts-utils';
+import { runWithConcurrency } from '@/lib/utils/concurrency';
 import { generateMediaForOutlines } from '@/lib/media/media-orchestrator';
 import { createLogger } from '@/lib/logger';
 import { encodeHeader } from '@/lib/utils/api-headers';
@@ -36,12 +42,12 @@ const GENERATION_MAX_RETRIES = 2;
 // scene-content route: maxDuration=300s
 //   - slide/quiz/pbl: 80s is enough
 //   - interactive: does TWO sequential LLM calls (scientific model + HTML), needs 200s
-// scene-actions route: maxDuration=60s (lighter, keep 50s client timeout)
-// tts route: maxDuration=30s, keep 25s client timeout
+// scene-actions route: maxDuration=120s (large action JSON)
+// tts route: maxDuration=120s, keep 90s client timeout (long narrations after chunking)
 const FETCH_TIMEOUT_CONTENT_MS = 80_000;
 const FETCH_TIMEOUT_CONTENT_INTERACTIVE_MS = 200_000;
-const FETCH_TIMEOUT_ACTIONS_MS = 50_000;
-const FETCH_TIMEOUT_TTS_MS = 25_000;
+const FETCH_TIMEOUT_ACTIONS_MS = 110_000;
+const FETCH_TIMEOUT_TTS_MS = 90_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -123,6 +129,7 @@ async function fetchSceneContent(
       style?: string;
     };
     agents?: AgentInfo[];
+    languageDirective?: string;
   },
   signal?: AbortSignal,
 ): Promise<SceneContentResult> {
@@ -197,6 +204,7 @@ async function fetchSceneActions(
     agents?: AgentInfo[];
     previousSpeeches?: string[];
     userProfile?: string;
+    languageDirective?: string;
   },
   signal?: AbortSignal,
 ): Promise<SceneActionsResult> {
@@ -256,6 +264,8 @@ async function fetchSceneActions(
   };
 }
 
+const TTS_THROTTLE_MAX_ATTEMPTS = 6;
+
 /** Generate TTS for one speech action and store in IndexedDB */
 export async function generateAndStoreTTS(
   audioId: string,
@@ -268,52 +278,78 @@ export async function generateAndStoreTTS(
   if (settings.ttsProviderId === 'browser-native-tts') return {};
 
   const ttsProviderConfig = settings.ttsProvidersConfig?.[settings.ttsProviderId];
-  const response = await fetch('/api/generate/tts', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      text,
-      audioId,
-      stageId,
-      ttsProviderId: settings.ttsProviderId,
-      ttsModelId: ttsProviderConfig?.modelId,
-      ttsVoice: voiceOverride || settings.ttsVoice,
-      ttsSpeed: settings.ttsSpeed,
-      ttsApiKey: ttsProviderConfig?.apiKey || undefined,
-      ttsBaseUrl: ttsProviderConfig?.baseUrl || undefined,
-    }),
-    signal: withTimeout(signal, FETCH_TIMEOUT_TTS_MS),
-  });
+  let lastMessage = '';
 
-  const data = await response
-    .json()
-    .catch(() => ({ success: false, error: response.statusText || 'Invalid TTS response' }));
-  if (!response.ok || !data.success || !data.base64 || !data.format) {
-    const err = new Error(
-      data.details || data.error || `TTS request failed: HTTP ${response.status}`,
-    );
+  for (let throttleAttempt = 1; throttleAttempt <= TTS_THROTTLE_MAX_ATTEMPTS; throttleAttempt++) {
+    const response = await fetch('/api/generate/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text,
+        audioId,
+        stageId,
+        ttsProviderId: settings.ttsProviderId,
+        ttsModelId: ttsProviderConfig?.modelId,
+        ttsVoice: voiceOverride || settings.ttsVoice,
+        ttsSpeed: settings.ttsSpeed,
+        ttsApiKey: ttsProviderConfig?.apiKey || undefined,
+        ttsBaseUrl: ttsProviderConfig?.baseUrl || undefined,
+      }),
+      signal: withTimeout(signal, FETCH_TIMEOUT_TTS_MS),
+    });
+
+    const data = (await response
+      .json()
+      .catch(() => ({ success: false, error: response.statusText || 'Invalid TTS response' }))) as {
+      success?: boolean;
+      base64?: string;
+      format?: string;
+      error?: string;
+      details?: string;
+      url?: string;
+      objectKey?: string;
+    };
+
+    if (response.ok && data.success && data.base64 && data.format) {
+      const binary = atob(data.base64);
+      const raw = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        raw[i] = binary.charCodeAt(i);
+      }
+      const remoteUrl = typeof data.url === 'string' && data.url.length > 0 ? data.url : '';
+      await db.audioFiles.put({
+        id: audioId,
+        format: data.format,
+        createdAt: Date.now(),
+        ossKey: remoteUrl,
+        // Without R2/D1, `url` is missing — keep bytes locally so playback can decode.
+        ...(remoteUrl ? {} : { blob: new Blob([raw], { type: mimeTypeForRecordedTtsFormat(data.format) }) }),
+      });
+
+      return {
+        audioUrl: data.url || undefined,
+        ossKey: data.objectKey || undefined,
+      };
+    }
+
+    lastMessage = String(data.details || data.error || `TTS request failed: HTTP ${response.status}`);
+    const retryable =
+      throttleAttempt < TTS_THROTTLE_MAX_ATTEMPTS && isLikelyTtsRateLimitError(lastMessage);
+    if (retryable) {
+      const backoffMs = 900 * throttleAttempt + Math.floor(Math.random() * 400);
+      log.warn('TTS rate-limited, backing off', { audioId, throttleAttempt, backoffMs, lastMessage });
+      await sleep(backoffMs);
+      continue;
+    }
+
+    const err = new Error(lastMessage);
     log.warn('TTS failed for', audioId, ':', err);
     throw err;
   }
 
-  const binary = atob(data.base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-
-  // Store metadata in IndexedDB (ossKey is required - audio is in R2)
-  await db.audioFiles.put({
-    id: audioId,
-    format: data.format,
-    createdAt: Date.now(),
-    ossKey: data.url || '',
-  });
-
-  return {
-    audioUrl: data.url || undefined,
-    ossKey: data.objectKey || undefined,
-  };
+  const err = new Error(lastMessage || 'TTS failed after retries');
+  log.warn('TTS failed for', audioId, ':', err);
+  throw err;
 }
 
 /** Generate TTS for all speech actions in a scene. Returns result. */
@@ -329,52 +365,53 @@ async function generateTTSForScene(
   );
   if (speechActions.length === 0) return { success: true, failedCount: 0 };
 
-  let failedCount = 0;
+  for (const action of speechActions) {
+    action.audioId = `tts_${action.id}`;
+  }
+
   let lastError: string | undefined;
 
-  for (const action of speechActions) {
-    const audioId = `tts_${action.id}`;
-    action.audioId = audioId;
-
-    const maxAttempts = GENERATION_MAX_RETRIES + 1;
-    let success = false;
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        const ttsResult = await generateAndStoreTTS(
-          audioId,
-          action.text,
-          scene.stageId,
-          signal,
-          action.voice,
-        );
-        if (ttsResult?.audioUrl) {
-          action.audioUrl = ttsResult.audioUrl;
-        }
-        success = true;
-        break;
-      } catch (error) {
-        lastError = error instanceof Error ? error.message : `TTS failed for action ${action.id}`;
-        const canRetry = attempt < maxAttempts;
-        log.warn('TTS generation failed:', {
-          providerId,
-          actionId: action.id,
-          textLength: action.text.length,
-          attempt,
-          maxAttempts,
-          error: lastError,
-        });
-        if (canRetry) {
-          const backoff = 800 * attempt;
-          await sleep(backoff);
-          continue;
+  const outcomes = await runWithConcurrency(
+    speechActions,
+    ttsSceneConcurrencyForProvider(providerId as TTSProviderId),
+    async (action) => {
+      const audioId = action.audioId!;
+      const maxAttempts = GENERATION_MAX_RETRIES + 1;
+      for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+          const ttsResult = await generateAndStoreTTS(
+            audioId,
+            action.text,
+            scene.stageId,
+            signal,
+            action.voice,
+          );
+          if (ttsResult?.audioUrl) {
+            action.audioUrl = ttsResult.audioUrl;
+          }
+          return true;
+        } catch (error) {
+          lastError =
+            error instanceof Error ? error.message : `TTS failed for action ${action.id}`;
+          log.warn('TTS generation failed:', {
+            providerId,
+            actionId: action.id,
+            textLength: action.text.length,
+            attempt,
+            maxAttempts,
+            error: lastError,
+          });
+          if (attempt < maxAttempts) {
+            await sleep(800 * attempt);
+            continue;
+          }
         }
       }
-    }
+      return false;
+    },
+  );
 
-    if (!success) {
-      failedCount++;
-    }
-  }
+  const failedCount = outcomes.filter((ok) => !ok).length;
 
   return {
     success: failedCount === 0,
@@ -402,6 +439,8 @@ export interface GenerationParams {
     language?: string;
     style?: string;
   };
+  /** From outline stream / stage; keeps scene-actions speech aligned with course language */
+  languageDirective?: string;
   agents?: AgentInfo[];
   userProfile?: string;
 }
@@ -508,6 +547,7 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
               imageMapping: params.imageMapping,
               stageInfo: params.stageInfo,
               agents: params.agents,
+              languageDirective: params.languageDirective ?? stage.languageDirective,
             },
             signal,
           );
@@ -542,6 +582,7 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
               agents: params.agents,
               previousSpeeches,
               userProfile: params.userProfile,
+              languageDirective: params.languageDirective ?? stage.languageDirective,
             },
             signal,
           );
@@ -704,6 +745,7 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
             imageMapping: params.imageMapping,
             stageInfo: params.stageInfo,
             agents: params.agents,
+            languageDirective: params.languageDirective ?? state.stage.languageDirective,
           },
           signal,
         );
@@ -733,6 +775,7 @@ export function useSceneGenerator(options: UseSceneGeneratorOptions = {}) {
             agents: params.agents,
             previousSpeeches,
             userProfile: params.userProfile,
+            languageDirective: params.languageDirective ?? state.stage.languageDirective,
           },
           signal,
         );

@@ -38,3 +38,24 @@ export const AGENT_DEFAULT_AVATARS = [
   '/avatars/thinker-2.png',
   '/avatars/note-taker-2.png',
 ] as const;
+
+/**
+ * When agent profiles are generated before scene outlines exist, there is no
+ * LLM-produced `languageDirective` yet. Map the course locale to a short
+ * instruction the agent-profiles API expects.
+ */
+export function languageDirectiveFromCourseLocale(locale: string): string {
+  const raw = (locale || 'zh-CN').trim() || 'zh-CN';
+  let human: string;
+  if (raw === 'zh-CN') human = 'Chinese (Simplified)';
+  else if (raw === 'zh-TW') human = 'Chinese (Traditional)';
+  else if (raw === 'en-US') human = 'English (US)';
+  else if (raw.startsWith('en')) human = 'English';
+  else if (raw.startsWith('ja')) human = 'Japanese';
+  else if (raw.startsWith('ko')) human = 'Korean';
+  else human = `the primary language associated with locale "${raw}"`;
+  return (
+    `Course locale is ${raw}. Write every agent name and persona in ${human}, the way real teachers and students would speak in that language. ` +
+    `Keep standard technical or proper nouns (e.g. Python, API, DFS) in their usual form for that language community.`
+  );
+}

@@ -1,5 +1,7 @@
 Create a code playground widget for: {{title}}
 
+**Output:** Your entire reply must be one raw HTML document (`<!DOCTYPE html>` … `</html>`). Do not lead with Markdown sections, `###` headings, or ` ```python ` blocks—those belong inside the widget’s editor JSON/script only.
+
 ## Programming Language
 
 {{programmingLanguage}}

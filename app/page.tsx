@@ -35,6 +35,7 @@ import { nanoid } from 'nanoid';
 import { storePdfBlob } from '@/lib/utils/image-storage';
 import type { UserRequirements, SceneCountConfig } from '@/lib/types/generation';
 import { useSettingsStore } from '@/lib/store/settings';
+import type { MinerUCloudModelVersion } from '@/lib/pdf/types';
 import { useUserProfileStore, AVATAR_OPTIONS } from '@/lib/store/user-profile';
 import {
   StageListItem,
@@ -351,7 +352,15 @@ function HomePage() {
       let pdfStorageKey: string | undefined;
       let pdfFileName: string | undefined;
       let pdfProviderId: string | undefined;
-      let pdfProviderConfig: { apiKey?: string; baseUrl?: string } | undefined;
+      let pdfProviderConfig:
+        | {
+            apiKey?: string;
+            baseUrl?: string;
+            isOcr?: boolean;
+            pageRanges?: string;
+            modelVersion?: MinerUCloudModelVersion;
+          }
+        | undefined;
 
       if (form.pdfFile) {
         pdfStorageKey = await storePdfBlob(form.pdfFile);
@@ -364,6 +373,13 @@ function HomePage() {
           pdfProviderConfig = {
             apiKey: providerCfg.apiKey,
             baseUrl: providerCfg.baseUrl,
+            ...(settings.pdfProviderId === 'mineru-cloud'
+              ? {
+                  isOcr: providerCfg.isOcr,
+                  pageRanges: providerCfg.pageRanges,
+                  modelVersion: providerCfg.modelVersion,
+                }
+              : {}),
           };
         }
       }

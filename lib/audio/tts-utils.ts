@@ -11,7 +11,42 @@ const log = createLogger('TTS');
 /** Provider-specific max text length limits. */
 export const TTS_MAX_TEXT_LENGTH: Partial<Record<TTSProviderId, number>> = {
   'glm-tts': 1024,
+  /**
+   * Qwen3-TTS-Flash / 同接口模型：官方文档写明「其他模型」单次合成文本最长 600 字符。
+   * @see https://help.aliyun.com/zh/model-studio/qwen-tts-api （text 字段说明）
+   */
+  'qwen-tts': 580,
 };
+
+/**
+ * Max parallel `/api/generate/tts` calls per scene.
+ * Qwen (DashScope) rejects concurrent bursts with `Throttling.RateQuota` — keep at 1.
+ */
+export function ttsSceneConcurrencyForProvider(providerId: TTSProviderId): number {
+  if (providerId === 'qwen-tts') return 1;
+  return 3;
+}
+
+/** MIME type for TTS bytes stored as IndexedDB `Blob` (local dev when no R2 URL). */
+export function mimeTypeForRecordedTtsFormat(format: string): string {
+  const f = format.toLowerCase();
+  if (f === 'wav') return 'audio/wav';
+  if (f === 'ogg' || f === 'oga') return 'audio/ogg';
+  if (f === 'aac') return 'audio/aac';
+  return 'audio/mpeg';
+}
+
+/** Detect DashScope / generic HTTP rate-limit responses for client-side backoff. */
+export function isLikelyTtsRateLimitError(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes('throttling') ||
+    m.includes('ratequota') ||
+    m.includes('rate limit') ||
+    m.includes('too many requests') ||
+    m.includes('quota exceeded')
+  );
+}
 
 /**
  * Split long text into chunks that respect sentence boundaries.

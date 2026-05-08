@@ -25,6 +25,8 @@ Infer the course language directive by applying the decision rules from the syst
 
 {{pdfContent}}
 
+If a bracketed excerpt notice appears directly above or within this block, treat the PDF summary as non-exhaustive but authoritative where shown; combine with explicit page/section scope in the requirements.
+
 ### Available Images
 
 {{availableImages}}

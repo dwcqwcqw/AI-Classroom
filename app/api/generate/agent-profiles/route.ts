@@ -11,7 +11,10 @@ import { callLLM } from '@/lib/ai/llm';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { resolveModelFromHeaders } from '@/lib/server/resolve-model';
-import { AGENT_COLOR_PALETTE } from '@/lib/constants/agent-defaults';
+import {
+  AGENT_COLOR_PALETTE,
+  languageDirectiveFromCourseLocale,
+} from '@/lib/constants/agent-defaults';
 
 const log = createLogger('Agent Profiles API');
 
@@ -26,6 +29,8 @@ interface RequestBody {
   availableVoices?: Array<{ providerId: string; voiceId: string; voiceName: string }>;
   /** Optional user-written instruction for how to design the agents */
   customPrompt?: string;
+  /** Legacy: prefer `languageDirective`; if missing, server maps locale to a directive */
+  language?: string;
 }
 
 function stripCodeFences(text: string): string {
@@ -46,6 +51,7 @@ export async function POST(req: NextRequest) {
       stageInfo,
       sceneOutlines,
       languageDirective,
+      language,
       availableAvatars,
       avatarDescriptions,
       availableVoices,
@@ -53,12 +59,22 @@ export async function POST(req: NextRequest) {
     } = body;
     stageName = stageInfo?.name;
 
+    const effectiveLanguageDirective =
+      (typeof languageDirective === 'string' && languageDirective.trim()) ||
+      (typeof language === 'string' && language.trim()
+        ? languageDirectiveFromCourseLocale(language.trim())
+        : '');
+
     // ── Validate required fields ──
     if (!stageInfo?.name) {
       return apiError('MISSING_REQUIRED_FIELD', 400, 'stageInfo.name is required');
     }
-    if (!languageDirective) {
-      return apiError('MISSING_REQUIRED_FIELD', 400, 'languageDirective is required');
+    if (!effectiveLanguageDirective) {
+      return apiError(
+        'MISSING_REQUIRED_FIELD',
+        400,
+        'languageDirective is required (or provide legacy `language` locale, e.g. zh-CN)',
+      );
     }
     if (!availableAvatars || availableAvatars.length === 0) {
       return apiError(
@@ -112,7 +128,7 @@ Requirements:
 - Exactly 1 agent must have role "teacher", the rest can be "assistant" or "student"
 - Priority values: teacher=10 (highest), assistant=7, student=4-6
 - Each agent needs: name, role, persona (2-3 sentences describing personality and teaching/learning style)
-- Language directive for this course: ${languageDirective}
+- Language directive for this course: ${effectiveLanguageDirective}
   Agent names and personas must follow this language directive.
 - Each agent must be assigned one avatar from this list: ${JSON.stringify(avatarDescriptions && avatarDescriptions.length > 0 ? avatarDescriptions.map((a) => ({ path: a.path, description: a.desc })) : availableAvatars)}
   - Pick an avatar that visually matches the agent's personality and role

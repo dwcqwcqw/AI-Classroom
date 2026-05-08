@@ -12,6 +12,7 @@
 import { useSettingsStore } from '@/lib/store/settings';
 import { db } from '@/lib/utils/database';
 import { createLogger } from '@/lib/logger';
+import { mimeTypeForRecordedTtsFormat } from '@/lib/audio/tts-utils';
 
 const log = createLogger('AudioPlayer');
 
@@ -63,17 +64,10 @@ async function fetchAndDecode(
   if (cached) return { id: audioId, buffer: cached };
 
   const record = await db.audioFiles.get(audioId).catch(() => undefined);
-  if (!record?.ossKey) {
-    // IndexedDB miss: try audioUrl fallback (server-loaded classrooms store audioUrl on actions)
-    if (!audioUrl) return { id: audioId, buffer: null };
-    let bytes: ArrayBuffer;
-    try {
-      bytes = await fetchAudioBytes(audioUrl, signal);
-    } catch {
-      return { id: audioId, buffer: null };
-    }
-    const ctx = getAudioContext();
-    if (!ctx) return { id: audioId, buffer: null };
+  const ctx = getAudioContext();
+  if (!ctx) return { id: audioId, buffer: null };
+
+  const decodeAndCache = async (bytes: ArrayBuffer) => {
     try {
       const buffer = await ctx.decodeAudioData(bytes.slice(0));
       cacheAudioBuffer(audioId, buffer);
@@ -81,25 +75,38 @@ async function fetchAndDecode(
     } catch {
       return { id: audioId, buffer: null };
     }
+  };
+
+  if (record?.blob) {
+    try {
+      const bytes = await record.blob.arrayBuffer();
+      const out = await decodeAndCache(bytes);
+      if (out.buffer) return out;
+    } catch {
+      /* fall through */
+    }
   }
 
-  let bytes: ArrayBuffer;
-  try {
-    bytes = await fetchAudioBytes(record.ossKey, signal);
-  } catch {
-    return { id: audioId, buffer: null };
+  const ossKey = record?.ossKey?.trim();
+  if (ossKey) {
+    try {
+      const bytes = await fetchAudioBytes(ossKey, signal);
+      return decodeAndCache(bytes);
+    } catch {
+      /* fall through */
+    }
   }
 
-  const ctx = getAudioContext();
-  if (!ctx) return { id: audioId, buffer: null };
-
-  try {
-    const buffer = await ctx.decodeAudioData(bytes.slice(0));
-    cacheAudioBuffer(audioId, buffer);
-    return { id: audioId, buffer };
-  } catch {
-    return { id: audioId, buffer: null };
+  if (audioUrl) {
+    try {
+      const bytes = await fetchAudioBytes(audioUrl, signal);
+      return decodeAndCache(bytes);
+    } catch {
+      return { id: audioId, buffer: null };
+    }
   }
+
+  return { id: audioId, buffer: null };
 }
 
 /**
@@ -224,6 +231,10 @@ interface ActiveNode {
 export class AudioPlayer {
   private active: ActiveNode | null = null;
   private htmlAudio: HTMLAudioElement | null = null;
+  /** Object URL from IndexedDB blob playback; must revoke on end/error/stop. */
+  private htmlBlobObjectUrl: string | null = null;
+  private htmlAudioEndedWrapper: (() => void) | null = null;
+  private htmlAudioErrorWrapper: (() => void) | null = null;
   private onEndedCallback: (() => void) | null = null;
   private muted: boolean = false;
   private volume: number = 1;
@@ -286,24 +297,29 @@ export class AudioPlayer {
     }
   }
 
-  private stopHtmlAudio(): void {
-    if (this.htmlAudio) {
-      this.htmlAudio.pause();
-      this.htmlAudio.src = '';
-      this.htmlAudio.removeEventListener('ended', this._htmlEndedHandler);
-      this.htmlAudio.removeEventListener('error', this._htmlErrorHandler);
-      this.htmlAudio = null;
+  private revokeHtmlBlobObjectUrl(): void {
+    if (this.htmlBlobObjectUrl) {
+      URL.revokeObjectURL(this.htmlBlobObjectUrl);
+      this.htmlBlobObjectUrl = null;
     }
   }
 
-  // Bound handlers so we can remove them reliably
-  private _htmlEndedHandler = () => {
-    this.htmlAudio = null;
-    this.onEndedCallback?.();
-  };
-  private _htmlErrorHandler = () => {
-    this.htmlAudio = null;
-  };
+  private stopHtmlAudio(): void {
+    if (this.htmlAudio) {
+      if (this.htmlAudioEndedWrapper) {
+        this.htmlAudio.removeEventListener('ended', this.htmlAudioEndedWrapper);
+        this.htmlAudioEndedWrapper = null;
+      }
+      if (this.htmlAudioErrorWrapper) {
+        this.htmlAudio.removeEventListener('error', this.htmlAudioErrorWrapper);
+        this.htmlAudioErrorWrapper = null;
+      }
+      this.htmlAudio.pause();
+      this.htmlAudio.src = '';
+      this.htmlAudio = null;
+    }
+    this.revokeHtmlBlobObjectUrl();
+  }
 
   /**
    * Play audio from a URL or R2 (via ossKey in IndexedDB).
@@ -333,11 +349,18 @@ export class AudioPlayer {
         // We skip audioUrl if audioId is provided (R2 takes precedence for pre-generated audio).
         if (audioId) {
           const record = await db.audioFiles.get(audioId).catch(() => undefined);
-          if (record?.ossKey) {
+          if (record?.blob) {
             try {
-              bytes = await fetchAudioBytes(record.ossKey);
+              bytes = await record.blob.arrayBuffer();
             } catch (e) {
-              log.warn('R2 audio fetch failed:', e);
+              log.warn('IndexedDB audio blob read failed:', e);
+            }
+          }
+          if (!bytes && record?.ossKey?.trim()) {
+            try {
+              bytes = await fetchAudioBytes(record.ossKey.trim());
+            } catch (e) {
+              log.warn('Remote audio fetch failed:', e);
             }
           }
         }
@@ -379,8 +402,11 @@ export class AudioPlayer {
 
     if (audioId) {
       const record = await db.audioFiles.get(audioId).catch(() => undefined);
-      if (record?.ossKey) {
-        src = record.ossKey;
+      if (record?.ossKey?.trim()) {
+        src = record.ossKey.trim();
+      } else if (record?.blob) {
+        this.htmlBlobObjectUrl = URL.createObjectURL(record.blob);
+        src = this.htmlBlobObjectUrl;
       }
     }
 
@@ -396,8 +422,18 @@ export class AudioPlayer {
       audio.preload = 'auto';
       audio.volume = this.muted ? 0 : this.volume;
 
-      audio.addEventListener('ended', this._htmlEndedHandler);
-      audio.addEventListener('error', this._htmlErrorHandler);
+      const onEnded = () => {
+        this.stopHtmlAudio();
+        this.onEndedCallback?.();
+      };
+      const onError = () => {
+        this.stopHtmlAudio();
+      };
+
+      this.htmlAudioEndedWrapper = onEnded;
+      this.htmlAudioErrorWrapper = onError;
+      audio.addEventListener('ended', onEnded);
+      audio.addEventListener('error', onError);
 
       audio.src = src!;
       this.htmlAudio = audio;
@@ -405,7 +441,7 @@ export class AudioPlayer {
       audio.play()
         .then(() => resolve(true))
         .catch((e) => {
-          this.htmlAudio = null;
+          this.stopHtmlAudio();
           reject(e);
         });
     });
@@ -455,14 +491,15 @@ export class AudioPlayer {
       bytes[i] = binary.charCodeAt(i);
     }
 
-    // Store metadata in IndexedDB (ossKey is required - audio is in R2)
+    const remoteUrl = typeof data.url === 'string' && data.url.length > 0 ? data.url : '';
     await db.audioFiles.put({
       id: audioId,
       format: data.format,
       text,
       voice: voiceOverride || settings.ttsVoice,
       createdAt: Date.now(),
-      ossKey: data.url || '',
+      ossKey: remoteUrl,
+      ...(remoteUrl ? {} : { blob: new Blob([bytes], { type: mimeTypeForRecordedTtsFormat(data.format) }) }),
     });
 
     return bytes.buffer;

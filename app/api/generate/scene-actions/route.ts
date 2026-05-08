@@ -29,7 +29,8 @@ import { resolveModelFromHeaders } from '@/lib/server/resolve-model';
 
 const log = createLogger('Scene Actions API');
 
-export const maxDuration = 60;
+/** Slide/quiz action JSON can be large; align with client timeout below. */
+export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
   let outlineTitle: string | undefined;

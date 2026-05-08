@@ -153,6 +153,7 @@ const log = createLogger('PDFProviders');
 export async function parsePDF(
   config: PDFParserConfig,
   pdfBuffer: Buffer,
+  sourceFileName?: string,
 ): Promise<ParsedPdfContent> {
   const provider = PDF_PROVIDERS[config.providerId];
   if (!provider) {
@@ -178,7 +179,7 @@ export async function parsePDF(
       break;
 
     case 'mineru-cloud':
-      result = await parseWithMinerUCloud(config, pdfBuffer);
+      result = await parseWithMinerUCloud(config, pdfBuffer, sourceFileName);
       break;
 
     default:
@@ -328,11 +329,20 @@ export async function getCurrentPDFConfig(): Promise<PDFParserConfig> {
   const { pdfProviderId, pdfProvidersConfig } = useSettingsStore.getState();
 
   const providerConfig = pdfProvidersConfig?.[pdfProviderId];
+  const cloudCfg =
+    pdfProviderId === 'mineru-cloud' ? pdfProvidersConfig?.['mineru-cloud'] : undefined;
 
   return {
     providerId: pdfProviderId,
     apiKey: providerConfig?.apiKey,
     baseUrl: providerConfig?.baseUrl,
+    ...(cloudCfg
+      ? {
+          mineruIsOcr: cloudCfg.isOcr,
+          mineruPageRanges: cloudCfg.pageRanges?.trim() || undefined,
+          mineruModelVersion: cloudCfg.modelVersion,
+        }
+      : {}),
   };
 }
 

@@ -84,6 +84,28 @@ function resolveAgent(state: OrchestratorStateType, agentId: string): AgentConfi
   return state.agentConfigOverrides[agentId] ?? useAgentRegistry.getState().getAgent(agentId);
 }
 
+/**
+ * When the client opens chat with an empty transcript, the director LLM often replies with
+ * meta-text instead of JSON. Pick a deterministic first speaker aligned with director rules.
+ */
+function pickColdStartAgent(agents: AgentConfig[], discussionMode: boolean): AgentConfig | null {
+  if (agents.length === 0) return null;
+  if (agents.length === 1) return agents[0];
+
+  if (discussionMode) {
+    const byPriority = [...agents].sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0));
+    const nonTeacher = byPriority.find((a) => a.role !== 'teacher');
+    return nonTeacher ?? byPriority[0];
+  }
+
+  const sorted = [...agents].sort((a, b) => {
+    if (a.role === 'teacher' && b.role !== 'teacher') return -1;
+    if (a.role !== 'teacher' && b.role === 'teacher') return 1;
+    return (b.priority ?? 0) - (a.priority ?? 0);
+  });
+  return sorted[0];
+}
+
 // ==================== Director Node ====================
 
 /**
@@ -160,6 +182,21 @@ async function directorNode(
 
   if (agents.length === 0) {
     return { shouldEnd: true };
+  }
+
+  // Empty transcript on turn 0: director model often returns prose ("provide context…") not JSON → END.
+  if (state.turnCount === 0 && state.messages.length === 0) {
+    const opener = pickColdStartAgent(agents, !!state.discussionContext);
+    if (opener) {
+      log.info(
+        `[Director] Cold start (no messages): dispatching "${opener.id}" (${state.discussionContext ? 'discussion' : 'classroom'} opener)`,
+      );
+      write({
+        type: 'thinking',
+        data: { stage: 'agent_loading', agentId: opener.id },
+      });
+      return { currentAgentId: opener.id, shouldEnd: false };
+    }
   }
 
   write({ type: 'thinking', data: { stage: 'director' } });
