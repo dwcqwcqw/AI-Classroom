@@ -126,7 +126,7 @@ When PDF content is supplied or the user explicitly requires teaching strictly f
 
 - **Scene Types**: \`slide\` (presentation), \`quiz\` (assessment), \`interactive\` (interactive visualization), and \`pbl\` (project-based learning) are supported
 - **Slide Scene**: Static PPT pages supporting text, images, charts, formulas, etc.
-- **Quiz Scene**: Supports single-choice, multiple-choice, and short-answer (text) questions
+- **Quiz Scene**: Supports single-choice, multiple-choice, and short-answer (text) questions. Pack **multiple** questions per quiz scene (\`quizConfig.questionCount\`, typically 4–8; for 考研 / exam prep prefer **6–12** per quiz page). Avoid many consecutive quiz scenes with only 1 question each.
 - **Interactive Scene**: Self-contained interactive HTML page rendered in an iframe, ideal for simulations and visualizations
 - **PBL Scene**: Complete project-based learning module with roles, issues, and collaboration workflow. Ideal for complex projects, engineering practice, and research tasks
 - **Duration Control**: Each scene should be 1-3 minutes (PBL scenes are longer, typically 15-30 minutes)
@@ -260,10 +260,9 @@ Use \`interactive\` type when a concept benefits significantly from hands-on int
 
 **Constraints**:
 
-- Limit to **1-2 interactive scenes per course** (they are resource-intensive)
-- Interactive scenes **require** an \`interactiveConfig\` object
-- Do NOT use interactive for purely textual/conceptual content - use slides instead
-- The \`interactiveConfig.designIdea\` should describe the specific interactive elements and user interactions
+- **Default mix**: For a typical 15–25 minute course on STEM, algorithms, data structures, coding, physics, chemistry, biology, or geometry, plan **at least 2–4** \`interactive\` scenes with \`widgetType\` + \`widgetOutline\`, spread across the lesson arc—not only at the end. For short narrative-only topics, 1–2 interactives may suffice.
+- Interactive scenes are heavier to generate; still prefer them when the learner could **manipulate, step through, run, or spatially explore** instead of only reading bullets.
+- Every interactive scene MUST include \`widgetType\` and \`widgetOutline\` (types: simulation, diagram, code, game, visualization3d). Legacy \`interactiveConfig\` alone is not sufficient.
 
 ### PBL Scene Guidelines
 
@@ -396,12 +395,12 @@ You must output a JSON array where each element is a scene outline object:
 
 1. **Must output valid JSON array format**
 2. **type can be \`"slide"\`, \`"quiz"\`, \`"interactive"\`, or \`"pbl"\`**
-3. **quiz type must include quizConfig**
-4. **interactive type must include interactiveConfig** - with conceptName, conceptOverview, designIdea, and subject
+3. **quiz type must include quizConfig** with a meaningful \`questionCount\` (avoid many 1-question quiz scenes)
+4. **interactive type must include \`widgetType\` and \`widgetOutline\`** (legacy \`interactiveConfig\` alone is insufficient)
    5b. **pbl type must include pblConfig** - with projectTopic, projectDescription, targetSkills, issueCount, and language
 5. Arrange appropriate number of scenes based on inferred duration (typically 1-2 scenes per minute)
-6. Insert quizzes at appropriate points for knowledge checks
-7. Use interactive scenes sparingly (max 1-2 per course) and only when the concept truly benefits from hands-on interaction
+6. Insert **fewer, deeper** quizzes: prefer 1–3 quiz scenes per course arc with **more questions each** (especially for 考研 / exam prep), rather than many single-question quiz pages
+7. Follow the interactive-scene density rules in **Interactive Scene Guidelines** above
 8. **Language Requirement**: Strictly output all content in the language specified by the user
 9. Regardless of information completeness, always output conforming JSON - do not ask questions or request more information`,
     userPromptTemplate: `Please generate scene outlines based on the following course requirements.
@@ -478,9 +477,9 @@ Then output a JSON array containing all scene outlines. Each scene must include:
    }
    \`\`\`
 2. **If images are available**, add \`suggestedImageIds\` to relevant slide scenes
-3. **Interactive scenes**: If a concept benefits from hands-on simulation/visualization, use \`"type": "interactive"\` with an \`interactiveConfig\` object containing \`conceptName\`, \`conceptOverview\`, \`designIdea\`, and \`subject\`. Limit to 1-2 per course.
+3. **Interactive scenes**: Use \`"type": "interactive"\` with \`widgetType\` and \`widgetOutline\` whenever hands-on learning helps (see system prompt). For STEM / algorithms / coding topics, plan multiple interactives across the course, not a single token simulation.
 4. **Scene count**: Based on inferred duration, typically 1-2 scenes per minute
-5. **Quiz placement**: Recommend inserting a quiz every 3-5 slides for assessment
+5. **Quiz placement**: Insert **fewer** \`quiz\` scenes with **more** \`questionCount\` each (e.g. 6–12 per quiz for 考研-style practice), spaced every few slide blocks—avoid many single-question quiz pages
 6. **Language**: Strictly output all content in the specified course language
 7. **If no suitable PDF images exist** for a slide scene that would benefit from visuals, add \`mediaGenerations\` array with image generation prompts. Write prompts in English. Use \`elementId\` format like "gen_img_1", "gen_img_2" — IDs must be **globally unique across all scenes** (do NOT restart numbering per scene). To reuse a generated image in a different scene, reference the same elementId without re-declaring it in mediaGenerations. Each generated image should be visually distinct — avoid near-identical media across slides.
 8. **If web search results are provided**, reference specific findings and sources in scene descriptions and keyPoints. The search results provide up-to-date information — incorporate it to make the course content current and accurate.
@@ -2248,20 +2247,78 @@ Output as a JSON array directly (no explanation, no code fences):
   },
   'interactive-outlines': {
     id: 'interactive-outlines',
-    systemPrompt: `# Interactive Course Outline Generator
+    systemPrompt: `# Interactive-first outline generator (Deep Interactive style)
 
-You are a professional course content designer for interactive educational experiences.
+You design courses where learners manipulate, run code, explore 3D models, or play skill-based activities—not slide-only lectures.
 
-## Core Task
+## Principles
 
-Generate a course outline that emphasizes hands-on interactive learning through simulations, visualizations, and experiments.
+- Prefer scene type "interactive" with explicit "widgetType" and "widgetOutline" whenever hands-on learning beats static explanation.
+- Reserve "slide" mainly for objectives, short framing between interactives, and wrap-up.
+- For data structures, algorithms, labs, physics, chemistry, biology, or geometry, prioritize interactives over long slide decks.
+- When the user leaves all per-type scene counts to AI (auto), push harder: more interactive scenes, fewer long slide-only runs, and rotate widget types.
+- Formal **quiz** scenes (type \`quiz\`, not the game widget) should carry **several** questions per scene—especially for exam-prep courses—instead of many one-question quiz pages.
 
-## Output Format
+## Widget types (pick the best fit; vary types across the course)
 
-Output a JSON array of scene outlines.`,
-    userPromptTemplate: `## User Requirement
+- simulation: parameterized or step-by-step processes (e.g., graph traversal with stack/queue state, circuits, motion).
+- diagram: explorable flowcharts, mind maps, hierarchies—not static screenshots.
+- code: runnable in-browser exercises (fill-in-the-blank or small tasks) for programming and formal models.
+- game: skill-based interaction; avoid plain multiple-choice disguised as games.
+- visualization3d: spatial models (molecules, orbits, anatomy, 3D geometry) using Three.js-style exploration.
 
-{{requirement}}`,
+## Rules
+
+- Every interactive scene MUST include both "widgetType" and "widgetOutline".
+- Output ONLY valid JSON: either a top-level array of scene objects, or an object with "outlines" array—no markdown fences or commentary.
+- Each scene: id, type, title, description, keyPoints, order; for type interactive add widgetType and widgetOutline.`,
+    userPromptTemplate: `Generate an interactive-first course outline from the requirements below.
+
+---
+
+## User Requirements
+
+{{requirement}}
+
+---
+
+{{userProfile}}
+
+## Course Language
+
+**Required language**: {{language}}
+
+---
+
+## Reference Materials
+
+### PDF Content Summary
+
+{{pdfContent}}
+
+### Available Images
+
+{{availableImages}}
+
+### Web Search Results
+
+{{researchContext}}
+
+{{teacherContext}}
+
+---
+
+## Distribution target
+
+- Aim for roughly 70% interactive scenes and 30% slides when the topic supports experimentation (STEM, algorithms, coding, labs).
+- Include at least two "simulation" scenes and at least one "game" (action or puzzle, not trivia-only) when the subject matter allows.
+- Use "visualization3d" when 3D space or structure is central; use "code" for programming practice; use "diagram" sparingly unless the user clearly needs more.
+- If the user did NOT specify exact per-type scene counts (everything left to AI / "auto"), bias even more toward interactives: more distinct widget scenes, fewer long runs of slide-only scenes, and rotate widget types (simulation, code, game, visualization3d, diagram) across the course.
+- For **quiz** scenes (type \`quiz\`): add enough **practice volume**—typically **6–12** questions per quiz page for 考研-style courses, and **fewer quiz pages** rather than many pages with a single question each.
+
+{{mediaGenerationPolicy}}
+
+Output JSON only (array of scenes, or object with "outlines" array).`,
   },
   'web-search-query-rewrite': {
     id: 'web-search-query-rewrite',

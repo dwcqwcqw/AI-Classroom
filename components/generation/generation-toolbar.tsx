@@ -484,6 +484,7 @@ function SceneCountPopover({
         <div className="border-t border-border/30" />
         <CounterRow
           label="测验 Quiz"
+          subLabel="每测验题目数为「自动」时：表示测验总题数（合并到少数测验页）"
           value={quizzes}
           onChange={(v) => set({ quizCount: v })}
           max={10}

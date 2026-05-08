@@ -150,6 +150,10 @@ For **shorter courses (<10 scenes)**:
 
 **Flexibility is encouraged** — match widgets to content needs, not rigid formulas.
 
+When the learner leaves **all scene-type counts to AI (auto / 0)** and does not cap interactives, prefer **more** interactive scenes and **stronger** widget variety than a slide-first course would use.
+
+Formal **`quiz` scenes** (scene type `quiz`, not the `game` widget) should pack **multiple** `quizConfig.questionCount` questions per page—especially for 考研 / exam-drilling flows—instead of many consecutive one-question quizzes.
+
 ## Example Outline with Good Game Design
 
 ```json

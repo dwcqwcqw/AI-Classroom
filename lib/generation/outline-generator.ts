@@ -13,9 +13,15 @@ import type {
   ImageMapping,
 } from '@/lib/types/generation';
 import { buildPrompt, PROMPT_IDS } from '@/lib/prompts';
-import { formatImageDescription, formatImagePlaceholder } from './prompt-formatters';
+import {
+  formatImageDescription,
+  formatImagePlaceholder,
+  effectiveRequirementTextForOutlines,
+  courseLanguagePromptLabel,
+} from './prompt-formatters';
 import { parseJsonResponse } from './json-repair';
 import { uniquifyMediaElementIds } from './scene-builder';
+import { consolidateConsecutiveThinQuizOutlines } from './outline-quiz-consolidation';
 import type { AICallFn, GenerationResult, GenerationCallbacks } from './pipeline-types';
 import { createLogger } from '@/lib/logger';
 const log = createLogger('Generation');
@@ -96,16 +102,23 @@ export async function generateSceneOutlinesFromRequirements(
     ? excerptPdfTextForPrompt(pdfText, maxPdf, requirements.requirement)
     : 'None';
 
-  const prompts = buildPrompt(PROMPT_IDS.REQUIREMENTS_TO_OUTLINES, {
-    // New simplified variables
-    requirement: requirements.requirement,
+  const interactiveMode = requirements.interactiveMode !== false;
+  const promptId = interactiveMode
+    ? PROMPT_IDS.INTERACTIVE_OUTLINES
+    : PROMPT_IDS.REQUIREMENTS_TO_OUTLINES;
+  const requirementForPrompt = effectiveRequirementTextForOutlines(requirements);
+
+  const prompts = buildPrompt(promptId, {
+    requirement: requirementForPrompt,
     pdfContent: pdfForPrompt,
     availableImages: availableImagesText,
     userProfile: userProfileText,
     mediaGenerationPolicy,
     researchContext: options?.researchContext || 'None',
-    // Server-side generation populates this via options; client-side populates via formatTeacherPersonaForPrompt
     teacherContext: options?.teacherContext || '',
+    ...(interactiveMode
+      ? { language: courseLanguagePromptLabel(requirements.language) }
+      : {}),
   });
 
   if (!prompts) {
@@ -153,8 +166,10 @@ export async function generateSceneOutlinesFromRequirements(
       order: index + 1,
     }));
 
+    const packedQuizzes = consolidateConsecutiveThinQuizOutlines(enriched);
+
     // Replace sequential gen_img_N/gen_vid_N with globally unique IDs
-    const result = uniquifyMediaElementIds(enriched);
+    const result = uniquifyMediaElementIds(packedQuizzes);
 
     callbacks?.onProgress?.({
       currentStage: 1,

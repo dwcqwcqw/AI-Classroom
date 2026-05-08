@@ -2,7 +2,7 @@
  * Prompt and context building utilities for the generation pipeline.
  */
 
-import type { PdfImage } from '@/lib/types/generation';
+import type { PdfImage, UserRequirements } from '@/lib/types/generation';
 import type { AgentInfo, SceneGenerationContext } from './pipeline-types';
 
 /**
@@ -159,4 +159,46 @@ export function buildLanguageText(directive?: string, sceneNote?: string): strin
     text += (text ? '\n\n' : '') + `Additional language note for this scene: ${sceneNote}`;
   }
   return text;
+}
+
+/**
+ * Appends optional scene-count constraints (same wording as scene-outlines-stream)
+ * so outline generation matches the streaming API when users set exact counts.
+ */
+export function effectiveRequirementTextForOutlines(requirements: UserRequirements): string {
+  const sc = requirements.sceneCounts;
+  const base = requirements.requirement;
+  if (!sc) return base;
+  const lines: string[] = [];
+  if ((sc.slideCount ?? 0) > 0) lines.push(`- 幻灯片 (slide) 场景数量：恰好 ${sc.slideCount} 个`);
+
+  const quizScenes = sc.quizCount ?? 0;
+  const perQuizQs = sc.questionsPerQuiz ?? 0;
+  if (quizScenes > 0 && perQuizQs > 0) {
+    lines.push(`- 测验 (quiz) 场景数量：恰好 ${quizScenes} 个`);
+    lines.push(
+      `- 每个测验的题目数量：恰好 ${perQuizQs} 题（在 quizConfig.questionCount 中体现）`,
+    );
+  } else if (quizScenes > 0 && perQuizQs === 0) {
+    const total = quizScenes;
+    const maxQuizPages = Math.min(4, Math.max(1, Math.ceil(total / 5)));
+    lines.push(
+      `- 测验总题数：至少 ${total} 题。用户将「测验」设为 ${total} 且「每测验题目数」为自动：此数字表示**希望的总题目数量**，不是 ${total} 个测验页。请使用 **1～${maxQuizPages}** 个 type 为 quiz 的场景，使各场景 \`quizConfig.questionCount\` 之和 ≥ ${total}；单场景建议 **4～10** 题（考研/刷题可多题同页）。**禁止**生成 ${total} 个每场景仅 1 题的 quiz。`,
+    );
+  } else if (quizScenes === 0 && perQuizQs > 0) {
+    lines.push(
+      `- 每个测验场景的题目数量：恰好 ${perQuizQs} 题（在 quizConfig.questionCount 中体现）；测验场景个数由 AI 根据课程节奏决定，但每个 quiz 必须满足该题数。`,
+    );
+  }
+  if ((sc.interactiveCount ?? 0) > 0) {
+    lines.push(`- 交互仿真 (interactive) 场景数量：恰好 ${sc.interactiveCount} 个`);
+  }
+  if ((sc.pblCount ?? 0) > 0) lines.push(`- 项目式学习 (pbl) 场景数量：恰好 ${sc.pblCount} 个`);
+  if (lines.length === 0) return base;
+  return `${base}\n\n## 用户指定的场景数量约束（必须严格遵守）\n\n${lines.join('\n')}\n\n以上约束优先级高于根据课程时长自动推断，请严格按照要求生成指定数量的场景。`;
+}
+
+/** Label for interactive-outlines user template "Course Language" section */
+export function courseLanguagePromptLabel(language: 'zh-CN' | 'en-US'): string {
+  return language === 'zh-CN' ? 'zh-CN（简体中文）' : 'en-US（English）';
 }

@@ -66,6 +66,7 @@ When PDF content is supplied or the user explicitly requires teaching strictly f
 - **Scene Types**: `slide` (presentation), `quiz` (assessment), `interactive` (interactive visualization), and `pbl` (project-based learning) are supported
 - **Slide Scene**: Static PPT pages supporting text, images, charts, formulas, etc.
 - **Quiz Scene**: Supports single-choice, multiple-choice, and short-answer (text) questions
+- **Quiz density (one playback page = one quiz scene)**: Each `quiz` scene should carry **multiple** questions via `quizConfig.questionCount` (typically **4–8**; for exam-prep / 考研-style drilling, prefer **6–12** per quiz when the course length allows). **Do not** emit many consecutive `quiz` scenes with `questionCount: 1` — consolidate practice into fewer, richer quiz pages.
 - **Interactive Scene**: Self-contained interactive HTML page rendered in an iframe, ideal for simulations and visualizations
 - **PBL Scene**: Complete project-based learning module with roles, issues, and collaboration workflow. Ideal for complex projects, engineering practice, and research tasks
 - **Duration Control**: Each scene should be 1-3 minutes (PBL scenes are longer, typically 15-30 minutes)
@@ -199,10 +200,9 @@ Use `interactive` type when a concept benefits significantly from hands-on inter
 
 **Constraints**:
 
-- Limit to **1-2 interactive scenes per course** (they are resource-intensive)
-- Interactive scenes **require** an `interactiveConfig` object
-- Do NOT use interactive for purely textual/conceptual content - use slides instead
-- The `interactiveConfig.designIdea` should describe the specific interactive elements and user interactions
+- **Default mix**: For a typical 15–25 minute course on STEM, algorithms, data structures, coding, physics, chemistry, biology, or geometry, plan **at least 2–4** `interactive` scenes (with `widgetType` + `widgetOutline`), distributed across the arc—not only at the end. For short narrative-only topics, 1–2 interactives may suffice.
+- Interactive scenes are heavier to generate; still prefer them whenever the learner could **manipulate, step through, run, or spatially explore** instead of only reading bullets.
+- Every new interactive scene MUST include `widgetType` and `widgetOutline` (see below). Legacy `interactiveConfig` alone is not sufficient.
 
 ### Widget Type Selection for Interactive Scenes
 
@@ -413,12 +413,12 @@ Output a JSON **object** (not a bare array) with this structure:
 
 1. **Must output valid JSON object with `languageDirective` and `outlines` fields**
 2. **type can be `"slide"`, `"quiz"`, `"interactive"`, or `"pbl"`**
-3. **quiz type must include quizConfig**
-4. **interactive type must include interactiveConfig** - with conceptName, conceptOverview, designIdea, and subject
+3. **quiz type must include quizConfig** with a meaningful `questionCount` (avoid many 1-question quiz scenes)
+4. **interactive type must include `widgetType` and `widgetOutline`** (legacy `interactiveConfig` alone is insufficient)
    5b. **pbl type must include pblConfig** - with projectTopic, projectDescription, targetSkills, and issueCount
 5. Arrange appropriate number of scenes based on inferred duration (typically 1-2 scenes per minute)
-6. Insert quizzes at appropriate points for knowledge checks
-7. Use interactive scenes sparingly (max 1-2 per course) and only when the concept truly benefits from hands-on interaction
+6. Insert **fewer, deeper** quizzes: prefer 1–3 quiz scenes per course arc with **more questions each** (especially for 考研 / exam prep), rather than many single-question quiz pages
+7. Follow the interactive-scene density rules in **Interactive Scene Guidelines** above
 8. **Language**: Infer from the user's requirement text and context. Output all scene content in the inferred language.
 9. Regardless of information completeness, always output conforming JSON - do not ask questions or request more information
 10. **No teacher identity on slides**: Scene titles and keyPoints must be neutral and topic-focused. Never include the teacher's name or role (e.g., avoid "Teacher Wang's Tips", "Teacher's Wishes"). Use generic labels like "Tips", "Summary", "Key Takeaways" instead.

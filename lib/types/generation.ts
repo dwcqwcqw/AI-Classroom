@@ -86,7 +86,8 @@ export interface UserRequirements {
   userBio?: string; // Student background for personalization
   webSearch?: boolean; // Enable web search for richer context
   sceneCounts?: SceneCountConfig; // Optional explicit scene count overrides
-  interactiveMode?: boolean; // Enable Interactive Mode for interactive-first generation
+  /** Omitted or true: interactive-first outlines (default). false: slide-heavier outlines. */
+  interactiveMode?: boolean;
 }
 
 /**

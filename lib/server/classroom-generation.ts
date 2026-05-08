@@ -40,6 +40,10 @@ export interface GenerateClassroomInput {
   enableVideoGeneration?: boolean;
   enableTTS?: boolean;
   agentMode?: 'default' | 'generate';
+  /**
+   * Outline style: omitted or true = interactive-first (default). false = slide-heavier prompts.
+   */
+  interactiveMode?: boolean;
 }
 
 export type ClassroomGenerationStep =
@@ -222,6 +226,7 @@ export async function generateClassroom(
   const requirements: UserRequirements = {
     requirement,
     language: 'zh-CN' as const,
+    ...(input.interactiveMode === false ? { interactiveMode: false } : {}),
   };
   const pdfText = pdfContent?.text || undefined;
 

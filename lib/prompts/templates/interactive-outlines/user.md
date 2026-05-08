@@ -36,8 +36,10 @@ Generate an Ultra Mode course outline based on the following requirements.
 
 ## Distribution Target
 
-- **70% interactive scenes** (widgets: simulation, diagram, code, game)
+- **70% interactive scenes** (widgets: simulation, diagram, code, game, visualization3d)
 - **30% slide scenes** (introductions, summaries, transitions)
+- When the user leaves all scene-type counts to AI (**auto / 0 = AI decides**), push **even harder** toward interactives: more distinct widget scenes, fewer long slide-only stretches, and rotate widget types across the lesson.
+- For **quiz** scenes: prefer **fewer pages** with **more questions each** (often **6–12** per quiz for intensive practice / 考研), not many pages with a single question.
 
 ## Widget Type Constraints (MANDATORY)
 
@@ -45,12 +47,13 @@ Generate an Ultra Mode course outline based on the following requirements.
 |------------|-----------|
 | simulation | **Minimum 2 scenes** |
 | game | **Minimum 1 scene** |
-| diagram | **Maximum 1 scene** |
+| diagram | **Maximum 1 scene** (unless the user clearly needs more process maps) |
+| visualization3d | **At least 1 scene** when the topic involves 3D structure, orbits, molecules, anatomy, or solid geometry |
 
 ## CRITICAL: Required Fields for Interactive Scenes
 
 Every interactive scene MUST include:
-- `widgetType`: One of "simulation", "diagram", "code", or "game"
+- `widgetType`: One of "simulation", "diagram", "code", "game", or "visualization3d"
 - `widgetOutline`: Object with widget-specific configuration
 
 Interactive scenes without these fields are INVALID.
