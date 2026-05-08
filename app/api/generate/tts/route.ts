@@ -18,7 +18,8 @@ import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
 
 const log = createLogger('TTS API');
 
-export const maxDuration = 30;
+/** Long single-shot TTS (e.g. after text chunking) can exceed 30s on some providers. */
+export const maxDuration = 120;
 
 export async function POST(req: NextRequest) {
   let ttsProviderId: string | undefined;
@@ -118,10 +119,17 @@ export async function POST(req: NextRequest) {
         kind: 'audio',
       });
     } catch (uploadError) {
-      log.warn(
-        `TTS upload skipped [audioId=${audioId}, stageId=${stageId ?? 'global'}]:`,
-        uploadError,
-      );
+      const msg = uploadError instanceof Error ? uploadError.message : String(uploadError);
+      if (msg.includes('R2_OR_D1_NOT_BOUND')) {
+        log.debug(
+          `TTS: shared file upload skipped (no R2/D1 in this environment) [audioId=${audioId}]; response still includes base64.`,
+        );
+      } else {
+        log.warn(
+          `TTS upload skipped [audioId=${audioId}, stageId=${stageId ?? 'global'}]:`,
+          uploadError,
+        );
+      }
     }
 
     // Convert to base64

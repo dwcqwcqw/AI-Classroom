@@ -11,6 +11,7 @@ import { useSceneGenerator } from '@/lib/hooks/use-scene-generator';
 import { useMediaGenerationStore } from '@/lib/store/media-generation';
 import { useWhiteboardHistoryStore } from '@/lib/store/whiteboard-history';
 import { createLogger } from '@/lib/logger';
+import { languageDirectiveFromCourseLocale } from '@/lib/constants/agent-defaults';
 import { MediaStageProvider } from '@/lib/contexts/media-stage-context';
 import { generateMediaForOutlines } from '@/lib/media/media-orchestrator';
 import { preloadAudio } from '@/lib/utils/audio-player';
@@ -360,6 +361,9 @@ export default function ClassroomDetailPage() {
             language: stage.language,
             style: stage.style,
           },
+          languageDirective:
+            (stage.languageDirective || '').trim() ||
+            languageDirectiveFromCourseLocale(stage.language || 'zh-CN'),
           agents: params.agents,
           userProfile: params.userProfile,
         });

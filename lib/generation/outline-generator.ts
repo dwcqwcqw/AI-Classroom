@@ -4,7 +4,8 @@
  */
 
 import { nanoid } from 'nanoid';
-import { MAX_PDF_CONTENT_CHARS, MAX_VISION_IMAGES } from '@/lib/constants/generation';
+import { getMaxPdfContextChars, MAX_VISION_IMAGES } from '@/lib/constants/generation';
+import { excerptPdfTextForPrompt } from '@/lib/generation/pdf-context-excerpt';
 import type {
   UserRequirements,
   SceneOutline,
@@ -90,10 +91,15 @@ export async function generateSceneOutlinesFromRequirements(
   }
 
   // Use simplified prompt variables
+  const maxPdf = getMaxPdfContextChars();
+  const pdfForPrompt = pdfText
+    ? excerptPdfTextForPrompt(pdfText, maxPdf, requirements.requirement)
+    : 'None';
+
   const prompts = buildPrompt(PROMPT_IDS.REQUIREMENTS_TO_OUTLINES, {
     // New simplified variables
     requirement: requirements.requirement,
-    pdfContent: pdfText ? pdfText.substring(0, MAX_PDF_CONTENT_CHARS) : 'None',
+    pdfContent: pdfForPrompt,
     availableImages: availableImagesText,
     userProfile: userProfileText,
     mediaGenerationPolicy,

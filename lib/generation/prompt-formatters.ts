@@ -5,6 +5,18 @@
 import type { PdfImage } from '@/lib/types/generation';
 import type { AgentInfo, SceneGenerationContext } from './pipeline-types';
 
+/**
+ * Rich block for slide/quiz/interactive/PBL *action* prompts so speech JSON matches
+ * the course language (outline LLM `languageDirective`), not English examples.
+ */
+export function formatLanguageDirectiveBlock(languageDirective?: string): string {
+  const t = (languageDirective || '').trim();
+  if (t) {
+    return `${t}\n\nEvery speech line you output (\`type:"text"\`, field \`content\`) MUST follow this directive. Do not switch to English unless the directive explicitly allows bilingual or English output.`;
+  }
+  return `The slide title and key points define the teaching language. If they are in Chinese, write ALL speech in Simplified Chinese. Do not default to English narration when the slide context is Chinese.`;
+}
+
 /** Build a course context string for injection into action prompts */
 export function buildCourseContext(ctx?: SceneGenerationContext): string {
   if (!ctx) return '';

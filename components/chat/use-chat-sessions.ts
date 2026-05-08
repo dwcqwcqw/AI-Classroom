@@ -101,6 +101,11 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
   const abortControllerRef = useRef<AbortController | null>(null);
   const streamingSessionIdRef = useRef<string | null>(null);
   const sessionsRef = useRef<ChatSession[]>(sessions);
+  /** QA send: React has not flushed `sessionsRef` yet; prefer this snapshot for the first /api/chat body. */
+  const qaStreamMessagesSnapshotRef = useRef<{
+    sessionId: string;
+    messages: UIMessage<ChatMessageMetadata>[];
+  } | null>(null);
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
@@ -504,6 +509,10 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
           },
 
           getMessages: () => {
+            const snap = qaStreamMessagesSnapshotRef.current;
+            if (snap?.sessionId === sessionId) {
+              return snap.messages;
+            }
             const currentSession = sessionsRef.current.find((s) => s.id === sessionId);
             return currentSession?.messages ?? requestTemplate.messages;
           },
@@ -896,6 +905,9 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             config: {
               agentIds,
               sessionType: session.type,
+              ...(session.type === 'qa'
+                ? { triggerAgentId: session.config.defaultAgentId ?? agentIds[0] }
+                : {}),
             },
             userProfile: {
               nickname: userProfileState.nickname || undefined,
@@ -1058,6 +1070,10 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
                   messages: [...s.messages, userMessage],
                   status: 'active' as SessionStatus,
                   updatedAt: now,
+                  config: {
+                    ...s.config,
+                    defaultAgentId: s.config.defaultAgentId ?? agentIds[0],
+                  },
                 }
               : s,
           );
@@ -1085,6 +1101,11 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
 
       const currentState = useStageStore.getState();
 
+      qaStreamMessagesSnapshotRef.current = {
+        sessionId: sessionId!,
+        messages: sessionMessages,
+      };
+
       try {
         log.info(
           `[ChatArea] Sending message: "${content.slice(0, 50)}..." agents: ${agentIds.join(', ')}`,
@@ -1107,6 +1128,8 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
             config: {
               agentIds,
               sessionType,
+              // Same fast-path as discussion: first turn always dispatches this agent when multiple are selected.
+              triggerAgentId: agentIds[0],
             },
             userProfile: {
               nickname: userProfileState.nickname || undefined,
@@ -1133,6 +1156,9 @@ export function useChatSessions(options: UseChatSessionsOptions = {}) {
           `Error: ${error instanceof Error ? error.message : String(error)}`,
         );
       } finally {
+        if (qaStreamMessagesSnapshotRef.current?.sessionId === sessionId) {
+          qaStreamMessagesSnapshotRef.current = null;
+        }
         // Only clean up if this is still the active controller (avoid race with interrupt)
         if (abortControllerRef.current === controller) {
           abortControllerRef.current = null;

@@ -287,34 +287,78 @@ async function generateGLMTTS(config: TTSModelConfig, text: string): Promise<TTS
   };
 }
 
+/** DashScope Qwen3-TTS-Flash: official max input length for `text` (characters). */
+const QWEN3_TTS_MAX_INPUT_CHARS = 600;
+
+/** Stay under Next route `maxDuration` (120s) so the client gets a clear error instead of hanging ~300s on upstream stream timeouts. */
+const QWEN_TTS_GENERATION_TIMEOUT_MS = 110_000;
+const QWEN_TTS_AUDIO_DOWNLOAD_TIMEOUT_MS = 45_000;
+
 /**
  * Qwen TTS implementation (DashScope API - Qwen3 TTS Flash)
  */
 async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TTSGenerationResult> {
+  if (text.length > QWEN3_TTS_MAX_INPUT_CHARS) {
+    throw new Error(
+      `Qwen TTS: text length ${text.length} exceeds API limit of ${QWEN3_TTS_MAX_INPUT_CHARS} characters. Split narration into shorter segments.`,
+    );
+  }
+
   const baseUrl = config.baseUrl || TTS_PROVIDERS['qwen-tts'].defaultBaseUrl;
 
   // Calculate speed: Qwen3 uses rate parameter from -500 to 500
   // speed 1.0 = rate 0, speed 2.0 = rate 500, speed 0.5 = rate -250
   const rate = Math.round(((config.speed || 1.0) - 1.0) * 500);
 
-  const response = await fetch(`${baseUrl}/services/aigc/multimodal-generation/generation`, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      'Content-Type': 'application/json; charset=utf-8',
+  const synthesisBody = JSON.stringify({
+    model: config.modelId || 'qwen3-tts-flash',
+    input: {
+      text,
+      voice: config.voice,
+      language_type: 'Chinese', // Default to Chinese, can be made configurable
     },
-    body: JSON.stringify({
-      model: config.modelId || 'qwen3-tts-flash',
-      input: {
-        text,
-        voice: config.voice,
-        language_type: 'Chinese', // Default to Chinese, can be made configurable
-      },
-      parameters: {
-        rate, // Speech rate from -500 to 500
-      },
-    }),
+    parameters: {
+      rate, // Speech rate from -500 to 500
+      // Explicit non-stream JSON mode (avoid long-lived connections / ResponseTimeout from DashScope)
+      stream: false,
+    },
   });
+
+  let response: Response;
+  const runSynthesis = () =>
+    fetch(`${baseUrl}/services/aigc/multimodal-generation/generation`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${config.apiKey}`,
+        'Content-Type': 'application/json; charset=utf-8',
+      },
+      body: synthesisBody,
+      signal: AbortSignal.timeout(QWEN_TTS_GENERATION_TIMEOUT_MS),
+    });
+
+  try {
+    response = await runSynthesis();
+  } catch (e) {
+    const name = e instanceof Error ? e.name : '';
+    const isTimeout = name === 'TimeoutError' || name === 'AbortError';
+    if (isTimeout) {
+      await new Promise((r) => setTimeout(r, 2500));
+      try {
+        response = await runSynthesis();
+      } catch (e2) {
+        const n2 = e2 instanceof Error ? e2.name : '';
+        if (n2 === 'TimeoutError' || n2 === 'AbortError') {
+          throw new Error(
+            `Qwen TTS: synthesis request timed out after ${QWEN_TTS_GENERATION_TIMEOUT_MS / 1000}s (2 attempts). ` +
+              `Retry or check DashScope status; avoid sending \`X-DashScope-SSE: enable\` for URL-based synthesis.`,
+          );
+        }
+        throw e2;
+      }
+    } else {
+      throw e;
+    }
+  }
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => response.statusText);
@@ -330,7 +374,20 @@ async function generateQwenTTS(config: TTSModelConfig, text: string): Promise<TT
 
   // Download audio from URL
   const audioUrl = data.output.audio.url;
-  const audioResponse = await fetch(audioUrl);
+  let audioResponse: Response;
+  try {
+    audioResponse = await fetch(audioUrl, {
+      signal: AbortSignal.timeout(QWEN_TTS_AUDIO_DOWNLOAD_TIMEOUT_MS),
+    });
+  } catch (e) {
+    const name = e instanceof Error ? e.name : '';
+    if (name === 'TimeoutError' || name === 'AbortError') {
+      throw new Error(
+        `Qwen TTS: download timed out after ${QWEN_TTS_AUDIO_DOWNLOAD_TIMEOUT_MS / 1000}s (${audioUrl.slice(0, 80)}…).`,
+      );
+    }
+    throw e;
+  }
 
   if (!audioResponse.ok) {
     throw new Error(`Failed to download audio from URL: ${audioResponse.statusText}`);

@@ -21,8 +21,14 @@ import {
 } from '@/lib/utils/image-storage';
 import { getCurrentModelConfig } from '@/lib/utils/model-config';
 import { encodeHeader } from '@/lib/utils/api-headers';
-import { db } from '@/lib/utils/database';
-import { MAX_PDF_CONTENT_CHARS, MAX_VISION_IMAGES } from '@/lib/constants/generation';
+import { languageDirectiveFromCourseLocale } from '@/lib/constants/agent-defaults';
+import { getMaxPdfContextChars, MAX_VISION_IMAGES } from '@/lib/constants/generation';
+import { excerptPdfTextForPrompt } from '@/lib/generation/pdf-context-excerpt';
+import { generateAndStoreTTS } from '@/lib/hooks/use-scene-generator';
+import type { TTSProviderId } from '@/lib/audio/types';
+import { splitLongSpeechActions, ttsSceneConcurrencyForProvider } from '@/lib/audio/tts-utils';
+import { runWithConcurrency } from '@/lib/utils/concurrency';
+import type { Action, SpeechAction } from '@/lib/types/action';
 import { nanoid } from 'nanoid';
 import type { Stage } from '@/lib/types/stage';
 import type { SceneOutline, PdfImage, ImageMapping } from '@/lib/types/generation';
@@ -192,6 +198,16 @@ function GenerationPreviewContent() {
         if (currentSession.pdfProviderConfig?.baseUrl?.trim()) {
           parseFormData.append('baseUrl', currentSession.pdfProviderConfig.baseUrl);
         }
+        if (currentSession.pdfProviderId === 'mineru-cloud' && currentSession.pdfProviderConfig) {
+          const c = currentSession.pdfProviderConfig;
+          parseFormData.append('isOcr', c.isOcr === false ? 'false' : 'true');
+          if (c.pageRanges?.trim()) {
+            parseFormData.append('pageRanges', c.pageRanges.trim());
+          }
+          if (c.modelVersion) {
+            parseFormData.append('modelVersion', c.modelVersion);
+          }
+        }
 
         const parseResponse = await fetch('/api/parse-pdf', {
           method: 'POST',
@@ -210,10 +226,14 @@ function GenerationPreviewContent() {
         }
 
         let pdfText = parseResult.data.text as string;
-
-        // Truncate if needed
-        if (pdfText.length > MAX_PDF_CONTENT_CHARS) {
-          pdfText = pdfText.substring(0, MAX_PDF_CONTENT_CHARS);
+        const rawPdfLen = pdfText.length;
+        const maxPdfClient = getMaxPdfContextChars();
+        if (rawPdfLen > maxPdfClient) {
+          pdfText = excerptPdfTextForPrompt(
+            pdfText,
+            maxPdfClient,
+            currentSession.requirements?.requirement,
+          );
         }
 
         // Create image metadata and store images
@@ -280,9 +300,9 @@ function GenerationPreviewContent() {
 
         // Truncation warnings
         const warnings: string[] = [];
-        if ((parseResult.data.text as string).length > MAX_PDF_CONTENT_CHARS) {
+        if (rawPdfLen > maxPdfClient) {
           warnings.push(
-            t('generation.textTruncated').replace('{n}', String(MAX_PDF_CONTENT_CHARS)),
+            t('generation.textTruncated').replace('{n}', String(maxPdfClient)),
           );
         }
         if (images.length > MAX_VISION_IMAGES) {
@@ -451,7 +471,9 @@ function GenerationPreviewContent() {
             headers: getApiHeaders(),
             body: JSON.stringify({
               stageInfo: { name: stage.name, description: stage.description },
-              language: currentSession.requirements.language || 'zh-CN',
+              languageDirective: languageDirectiveFromCourseLocale(
+                currentSession.requirements.language || 'zh-CN',
+              ),
               availableAvatars: allAvatars.map((a) => a.path),
               avatarDescriptions: allAvatars.map((a) => ({ path: a.path, desc: a.desc })),
               availableVoices: getAvailableVoicesForGeneration(),
@@ -526,12 +548,15 @@ function GenerationPreviewContent() {
 
       // ── Generate outlines (with agent personas for teacher context) ──
       let outlines = currentSession.sceneOutlines;
+      let languageDirectiveForScenes = (currentSession.languageDirective || '').trim();
 
       const outlineStepIdx = activeSteps.findIndex((s) => s.id === 'outline');
       setCurrentStepIndex(outlineStepIdx >= 0 ? outlineStepIdx : 0);
       if (!outlines || outlines.length === 0) {
         log.debug('=== Generating outlines (SSE) ===');
         setStreamingOutlines([]);
+
+        const outlineMeta: { languageDirective?: string } = {};
 
         outlines = await new Promise<SceneOutline[]>((resolve, reject) => {
           const collected: SceneOutline[] = [];
@@ -579,11 +604,18 @@ function GenerationPreviewContent() {
                         if (evt.type === 'outline') {
                           collected.push(evt.data);
                           setStreamingOutlines([...collected]);
+                        } else if (evt.type === 'languageDirective') {
+                          if (typeof evt.data === 'string' && evt.data.trim()) {
+                            outlineMeta.languageDirective = evt.data;
+                          }
                         } else if (evt.type === 'retry') {
                           collected.length = 0;
                           setStreamingOutlines([]);
                           setStatusMessage(t('generation.outlineRetrying'));
                         } else if (evt.type === 'done') {
+                          if (typeof evt.languageDirective === 'string' && evt.languageDirective.trim()) {
+                            outlineMeta.languageDirective = evt.languageDirective;
+                          }
                           resolve(evt.outlines || collected);
                           return;
                         } else if (evt.type === 'error') {
@@ -611,7 +643,15 @@ function GenerationPreviewContent() {
             .catch(reject);
         });
 
-        const updatedSession = { ...currentSession, sceneOutlines: outlines };
+        languageDirectiveForScenes =
+          (outlineMeta.languageDirective || '').trim() ||
+          languageDirectiveFromCourseLocale(currentSession.requirements.language || 'zh-CN');
+
+        const updatedSession = {
+          ...currentSession,
+          sceneOutlines: outlines,
+          languageDirective: languageDirectiveForScenes,
+        };
         setSession(updatedSession);
         sessionStorage.setItem('generationSession', JSON.stringify(updatedSession));
 
@@ -631,6 +671,13 @@ function GenerationPreviewContent() {
       if (!outlines || outlines.length === 0) {
         throw new Error(t('generation.outlineEmptyResponse'));
       }
+
+      if (!languageDirectiveForScenes) {
+        languageDirectiveForScenes = languageDirectiveFromCourseLocale(
+          currentSession.requirements.language || 'zh-CN',
+        );
+      }
+      stage.languageDirective = languageDirectiveForScenes;
 
       // Store stage and outlines
       const store = useStageStore.getState();
@@ -671,6 +718,7 @@ function GenerationPreviewContent() {
           stageInfo,
           stageId: stage.id,
           agents,
+          languageDirective: languageDirectiveForScenes,
         }),
         signal,
       });
@@ -700,6 +748,7 @@ function GenerationPreviewContent() {
           agents,
           previousSpeeches: [],
           userProfile,
+          languageDirective: languageDirectiveForScenes,
         }),
         signal,
       });
@@ -714,61 +763,42 @@ function GenerationPreviewContent() {
         throw new Error(data.error || t('generation.sceneGenerateFailed'));
       }
 
-      // Generate TTS for first scene (part of actions step — blocking)
+      // Generate TTS for first scene (parallelism capped per provider; Qwen = 1 to avoid DashScope throttling)
       if (settings.ttsEnabled && settings.ttsProviderId !== 'browser-native-tts') {
-        const ttsProviderConfig = settings.ttsProvidersConfig?.[settings.ttsProviderId];
-        const speechActions = (data.scene.actions || []).filter(
-          (a: { type: string; text?: string }) => a.type === 'speech' && a.text,
+        const sceneActions = (data.scene.actions || []) as Action[];
+        data.scene.actions = splitLongSpeechActions(sceneActions, settings.ttsProviderId);
+        const speechActions = (data.scene.actions as Action[]).filter(
+          (a): a is SpeechAction => a.type === 'speech' && !!a.text,
         );
 
-        let ttsFailCount = 0;
         for (const action of speechActions) {
-          const audioId = `tts_${action.id}`;
-          action.audioId = audioId;
-          try {
-            const resp = await fetch('/api/generate/tts', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                text: action.text,
-                audioId,
-                stageId: stage.id,
-                ttsProviderId: settings.ttsProviderId,
-                ttsModelId: ttsProviderConfig?.modelId,
-                ttsVoice: settings.ttsVoice,
-                ttsSpeed: settings.ttsSpeed,
-                ttsApiKey: ttsProviderConfig?.apiKey || undefined,
-                ttsBaseUrl: ttsProviderConfig?.baseUrl || undefined,
-              }),
-              signal,
-            });
-            if (!resp.ok) {
-              ttsFailCount++;
-              continue;
-            }
-            const ttsData = await resp.json();
-            if (!ttsData.success) {
-              ttsFailCount++;
-              continue;
-            }
-            const binary = atob(ttsData.base64);
-            const bytes = new Uint8Array(binary.length);
-            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-            await db.audioFiles.put({
-              id: audioId,
-              format: ttsData.format,
-              createdAt: Date.now(),
-              ossKey: ttsData.url || '',
-            });
-            if (ttsData.url) {
-              action.audioUrl = ttsData.url;
-            }
-          } catch (err) {
-            log.warn(`[TTS] Failed for ${audioId}:`, err);
-            ttsFailCount++;
-          }
+          action.audioId = `tts_${action.id}`;
         }
 
+        const outcomes = await runWithConcurrency(
+          speechActions,
+          ttsSceneConcurrencyForProvider(settings.ttsProviderId as TTSProviderId),
+          async (action) => {
+            try {
+              const ttsResult = await generateAndStoreTTS(
+                action.audioId!,
+                action.text!,
+                stage.id,
+                signal,
+                action.voice,
+              );
+              if (ttsResult?.audioUrl) {
+                action.audioUrl = ttsResult.audioUrl;
+              }
+              return true;
+            } catch (err) {
+              log.warn(`[TTS] Failed for ${action.audioId}:`, err);
+              return false;
+            }
+          },
+        );
+
+        const ttsFailCount = outcomes.filter((ok) => !ok).length;
         if (ttsFailCount > 0 && speechActions.length > 0) {
           throw new Error(t('generation.speechFailed'));
         }
@@ -789,6 +819,7 @@ function GenerationPreviewContent() {
           pdfImages: currentSession.pdfImages,
           agents,
           userProfile,
+          languageDirective: languageDirectiveForScenes,
         }),
       );
 

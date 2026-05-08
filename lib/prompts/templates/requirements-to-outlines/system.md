@@ -47,6 +47,18 @@ Infer the course language from all available signals and produce:
 
 ---
 
+## PDF and textbook faithfulness
+
+When PDF content is supplied or the user explicitly requires teaching strictly from the document (e.g. 考研教材、紧扣原文、不得编造、与 PDF 一致):
+
+- Treat **PDF Content Summary** and **Available Images** as the primary sources for definitions, graphs, vertex/edge relationships, worked examples, and answers. **Do not invent** structures or solutions unsupported by those materials.
+- If the user asks for a **verification / checklist / 核对** phase before the main lesson, allocate the **first 1–2 slide** scenes to that phase (clear titles and keyPoints), then continue with teaching scenes.
+- Prefer **suggestedImageIds** for scenes that depend on textbook diagrams; use **mediaGenerations** only when no PDF image suffices, and keep prompts clearly illustrative if the diagram is not in the PDF.
+- Honor explicit **scope limits** in the requirement (chapters/sections to include or exclude). Do not outline teaching outside that scope.
+- If a bracketed **excerpt notice** appears in the PDF summary, the text is non-exhaustive but still authoritative where shown; combine it with the user’s stated page/section bounds.
+
+---
+
 ## Design Principles
 
 ### MAIC Platform Technical Constraints

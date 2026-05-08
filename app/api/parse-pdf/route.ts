@@ -1,12 +1,15 @@
 import { NextRequest } from 'next/server';
 import { parsePDF } from '@/lib/pdf/pdf-providers';
 import { resolvePDFApiKey, resolvePDFBaseUrl } from '@/lib/server/provider-config';
-import type { PDFProviderId } from '@/lib/pdf/types';
+import type { MinerUCloudModelVersion, PDFProviderId } from '@/lib/pdf/types';
 import type { ParsedPdfContent } from '@/lib/types/pdf';
 import { createLogger } from '@/lib/logger';
 import { apiError, apiSuccess } from '@/lib/server/api-response';
 import { validateUrlForSSRF } from '@/lib/server/ssrf-guard';
 const log = createLogger('Parse PDF');
+
+/** MinerU Cloud: presigned upload of large PDFs + poll + ZIP often exceeds 60s. */
+export const maxDuration = 300;
 
 export async function POST(req: NextRequest) {
   let pdfFileName: string | undefined;
@@ -45,6 +48,24 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    const mineruModelRaw = formData.get('modelVersion') as string | null;
+    const mineruModelAllow = new Set<string>(['pipeline', 'vlm', 'MinerU-HTML']);
+    const mineruModelVersion =
+      mineruModelRaw && mineruModelAllow.has(mineruModelRaw)
+        ? (mineruModelRaw as MinerUCloudModelVersion)
+        : undefined;
+
+    const isOcrField = formData.get('isOcr');
+    let mineruIsOcr: boolean | undefined;
+    if (isOcrField === 'false' || isOcrField === '0') mineruIsOcr = false;
+    else if (isOcrField === 'true' || isOcrField === '1') mineruIsOcr = true;
+
+    const pageRangesField = formData.get('pageRanges');
+    const mineruPageRanges =
+      typeof pageRangesField === 'string' && pageRangesField.trim()
+        ? pageRangesField.trim()
+        : undefined;
+
     const config = {
       providerId: effectiveProviderId,
       apiKey: clientBaseUrl
@@ -53,6 +74,13 @@ export async function POST(req: NextRequest) {
       baseUrl: clientBaseUrl
         ? clientBaseUrl
         : resolvePDFBaseUrl(effectiveProviderId, baseUrl || undefined),
+      ...(effectiveProviderId === 'mineru-cloud'
+        ? {
+            mineruIsOcr,
+            mineruPageRanges,
+            mineruModelVersion,
+          }
+        : {}),
     };
 
     // Convert PDF to buffer
@@ -60,7 +88,7 @@ export async function POST(req: NextRequest) {
     const buffer = Buffer.from(arrayBuffer);
 
     // Parse PDF using the provider system
-    const result = await parsePDF(config, buffer);
+    const result = await parsePDF(config, buffer, pdfFile.name || undefined);
 
     // Add file metadata
     const resultWithMetadata: ParsedPdfContent = {

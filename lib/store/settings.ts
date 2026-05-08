@@ -12,7 +12,7 @@ import type { TTSProviderId, ASRProviderId, BuiltInTTSProviderId } from '@/lib/a
 import { isCustomTTSProvider, isCustomASRProvider } from '@/lib/audio/types';
 import { ASR_PROVIDERS, DEFAULT_TTS_VOICES, TTS_PROVIDERS } from '@/lib/audio/constants';
 import { PDF_PROVIDERS } from '@/lib/pdf/constants';
-import type { PDFProviderId } from '@/lib/pdf/types';
+import type { MinerUCloudModelVersion, PDFProviderId } from '@/lib/pdf/types';
 import type { ImageProviderId, VideoProviderId } from '@/lib/media/types';
 import { IMAGE_PROVIDERS } from '@/lib/media/image-providers';
 import { VIDEO_PROVIDERS } from '@/lib/media/video-providers';
@@ -95,6 +95,10 @@ export interface SettingsState {
       enabled: boolean;
       isServerConfigured?: boolean;
       serverBaseUrl?: string;
+      /** MinerU Cloud（精准解析 v4）可选 */
+      isOcr?: boolean;
+      pageRanges?: string;
+      modelVersion?: MinerUCloudModelVersion;
     }
   >;
 
@@ -243,7 +247,16 @@ export interface SettingsState {
   setPDFProvider: (providerId: PDFProviderId) => void;
   setPDFProviderConfig: (
     providerId: PDFProviderId,
-    config: Partial<{ apiKey: string; baseUrl: string; enabled: boolean }>,
+    config: Partial<{
+      apiKey: string;
+      baseUrl: string;
+      enabled: boolean;
+      isServerConfigured?: boolean;
+      serverBaseUrl?: string;
+      isOcr?: boolean;
+      pageRanges?: string;
+      modelVersion?: MinerUCloudModelVersion;
+    }>,
   ) => void;
 
   // Image Generation actions
@@ -342,8 +355,25 @@ const getDefaultPDFConfig = () => ({
   pdfProvidersConfig: {
     unpdf: { apiKey: '', baseUrl: '', enabled: true },
     mineru: { apiKey: '', baseUrl: '', enabled: false },
-    'mineru-cloud': { apiKey: '', baseUrl: '', enabled: false },
-  } as Record<PDFProviderId, { apiKey: string; baseUrl: string; enabled: boolean }>,
+    'mineru-cloud': {
+      apiKey: '',
+      baseUrl: '',
+      enabled: false,
+      isOcr: true,
+      pageRanges: '',
+      modelVersion: 'vlm' as MinerUCloudModelVersion,
+    },
+  } as Record<
+    PDFProviderId,
+    {
+      apiKey: string;
+      baseUrl: string;
+      enabled: boolean;
+      isOcr?: boolean;
+      pageRanges?: string;
+      modelVersion?: MinerUCloudModelVersion;
+    }
+  >,
 });
 
 // Initialize default Image config
