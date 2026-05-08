@@ -287,7 +287,10 @@
     "generateFailed": "生成课堂失败，请重试",
     "requirementPlaceholder": "输入你想学的任何内容，例如：\n「从零学 Python，30 分钟写出第一个程序」\n「用白板给我讲解傅里叶变换」\n「阿瓦隆桌游怎么玩」",
     "requirementRequired": "请输入课程需求",
-    "fileTooLarge": "文件过大，请选择小于50MB的PDF文件"
+    "fileTooLarge": "文件过大，请选择小于50MB的PDF文件",
+    "internalInstructionSummary": "高级：仅 AI 可见的生成策略（不写进课堂正文）",
+    "internalInstructionHint": "此处内容只合并到大纲生成的系统提示中，不会当作课程需求正文；请勿把「PDF 契约」「交付物清单」等写进上面主输入框，以免被做成幻灯片或互动场景。也可在服务端配置环境变量 INTERNAL_GENERATION_INSTRUCTION。",
+    "internalInstructionPlaceholder": "例如：PDF 5.3 范围、禁止编造、核对表要求……"
   },
   "generation": {
     "analyzingPdf": "解析 PDF 文档",

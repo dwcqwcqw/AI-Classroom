@@ -30,6 +30,9 @@ export async function POST(req: NextRequest) {
       ...(rawBody.enableTTS != null ? { enableTTS: rawBody.enableTTS } : {}),
       ...(rawBody.agentMode ? { agentMode: rawBody.agentMode } : {}),
       ...(rawBody.interactiveMode === false ? { interactiveMode: false } : {}),
+      ...(rawBody.internalInstruction?.trim()
+        ? { internalInstruction: rawBody.internalInstruction.trim() }
+        : {}),
     };
     const { requirement } = body;
 

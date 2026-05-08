@@ -28,6 +28,10 @@ import {
   courseLanguagePromptLabel,
 } from '@/lib/generation/prompt-formatters';
 import { consolidateConsecutiveThinQuizOutlines } from '@/lib/generation/outline-quiz-consolidation';
+import {
+  appendInternalInstructionToSystemPrompt,
+  resolveInternalGenerationInstruction,
+} from '@/lib/generation/internal-generation-instruction';
 import type { AgentInfo } from '@/lib/generation/generation-pipeline';
 import { getMaxPdfContextChars, MAX_VISION_IMAGES } from '@/lib/constants/generation';
 import { excerptPdfTextForPrompt } from '@/lib/generation/pdf-context-excerpt';
@@ -245,6 +249,12 @@ export async function POST(req: NextRequest) {
       return apiError('INTERNAL_ERROR', 500, 'Prompt template not found');
     }
 
+    const internalInstruction = resolveInternalGenerationInstruction(requirements);
+    const systemPrompt = appendInternalInstructionToSystemPrompt(
+      prompts.system,
+      internalInstruction,
+    );
+
     log.info(
       `Generating outlines: "${requirements.requirement.substring(0, 50)}" [model=${modelString}]`,
     );
@@ -281,7 +291,7 @@ export async function POST(req: NextRequest) {
           const streamParams = visionImages?.length
             ? {
                 model: languageModel,
-                system: prompts.system,
+                system: systemPrompt,
                 messages: [
                   {
                     role: 'user' as const,
@@ -292,7 +302,7 @@ export async function POST(req: NextRequest) {
               }
             : {
                 model: languageModel,
-                system: prompts.system,
+                system: systemPrompt,
                 prompt: prompts.user,
                 maxOutputTokens: modelInfo?.outputWindow,
               };
@@ -361,7 +371,7 @@ export async function POST(req: NextRequest) {
                       model: languageModel,
                       ...(visionImages?.length && hasVision
                         ? {
-                            system: prompts.system,
+                            system: systemPrompt,
                             messages: [
                               {
                                 role: 'user' as const,
@@ -370,7 +380,7 @@ export async function POST(req: NextRequest) {
                             ],
                           }
                         : {
-                            system: prompts.system,
+                            system: systemPrompt,
                             prompt: prompts.user,
                           }),
                       maxOutputTokens: modelInfo?.outputWindow,

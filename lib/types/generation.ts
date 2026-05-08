@@ -88,6 +88,13 @@ export interface UserRequirements {
   sceneCounts?: SceneCountConfig; // Optional explicit scene count overrides
   /** Omitted or true: interactive-first outlines (default). false: slide-heavier outlines. */
   interactiveMode?: boolean;
+  /**
+   * Extra instructions merged **only into the outline system prompt** (not the user
+   * requirement body). Use for PDF fidelity contracts, deliverable checklists, etc.
+   * so they are less likely to become slide/interactive titles. Server env
+   * INTERNAL_GENERATION_INSTRUCTION is used when this is omitted.
+   */
+  internalInstruction?: string;
 }
 
 /**

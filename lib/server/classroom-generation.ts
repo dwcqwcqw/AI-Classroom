@@ -44,6 +44,8 @@ export interface GenerateClassroomInput {
    * Outline style: omitted or true = interactive-first (default). false = slide-heavier prompts.
    */
   interactiveMode?: boolean;
+  /** Merged into outline system prompt only; see UserRequirements.internalInstruction */
+  internalInstruction?: string;
 }
 
 export type ClassroomGenerationStep =
@@ -227,6 +229,9 @@ export async function generateClassroom(
     requirement,
     language: 'zh-CN' as const,
     ...(input.interactiveMode === false ? { interactiveMode: false } : {}),
+    ...(input.internalInstruction?.trim()
+      ? { internalInstruction: input.internalInstruction.trim() }
+      : {}),
   };
   const pdfText = pdfContent?.text || undefined;
 

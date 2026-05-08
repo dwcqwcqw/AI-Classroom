@@ -22,6 +22,10 @@ import {
 import { parseJsonResponse } from './json-repair';
 import { uniquifyMediaElementIds } from './scene-builder';
 import { consolidateConsecutiveThinQuizOutlines } from './outline-quiz-consolidation';
+import {
+  appendInternalInstructionToSystemPrompt,
+  resolveInternalGenerationInstruction,
+} from './internal-generation-instruction';
 import type { AICallFn, GenerationResult, GenerationCallbacks } from './pipeline-types';
 import { createLogger } from '@/lib/logger';
 const log = createLogger('Generation');
@@ -125,6 +129,12 @@ export async function generateSceneOutlinesFromRequirements(
     return { success: false, error: 'Prompt template not found' };
   }
 
+  const internalInstruction = resolveInternalGenerationInstruction(requirements);
+  const systemPrompt = appendInternalInstructionToSystemPrompt(
+    prompts.system,
+    internalInstruction,
+  );
+
   try {
     callbacks?.onProgress?.({
       currentStage: 1,
@@ -135,7 +145,7 @@ export async function generateSceneOutlinesFromRequirements(
       totalScenes: 0,
     });
 
-    const response = await aiCall(prompts.system, prompts.user, visionImages);
+    const response = await aiCall(systemPrompt, prompts.user, visionImages);
     const parsed = parseJsonResponse<
       { languageDirective: string; outlines: SceneOutline[] } | SceneOutline[]
     >(response);

@@ -287,7 +287,10 @@
     "generateFailed": "教室の生成に失敗しました。もう一度お試しください",
     "requirementPlaceholder": "学びたいことを自由に入力してください。例えば：\n「Pythonをゼロから30分で教えて」\n「フーリエ変換をホワイトボードで解説して」\n「ボードゲーム『アバロン』の遊び方」",
     "requirementRequired": "コースの要件を入力してください",
-    "fileTooLarge": "ファイルが大きすぎます。50MB以下のPDFファイルを選択してください"
+    "fileTooLarge": "ファイルが大きすぎます。50MB以下のPDFファイルを選択してください",
+    "internalInstructionSummary": "上級：AI向け生成ポリシー（教材本文には出しません）",
+    "internalInstructionHint": "ここはアウトライン用システムプロンプトにのみ付加されます。チェックリスト等は本文欄ではなくここへ。サーバー環境変数 INTERNAL_GENERATION_INSTRUCTION でも設定可能です。",
+    "internalInstructionPlaceholder": "例：PDF範囲・捏造禁止・確認表…"
   },
   "generation": {
     "analyzingPdf": "PDFドキュメントを分析中",

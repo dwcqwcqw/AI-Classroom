@@ -287,7 +287,10 @@
     "generateFailed": "Failed to generate classroom, please try again",
     "requirementPlaceholder": "Tell me anything you want to learn, e.g.\n\"Teach me Python from scratch in 30 minutes\"\n\"Explain Fourier Transform on the whiteboard\"\n\"How to play the board game Avalon\"",
     "requirementRequired": "Please enter course requirements",
-    "fileTooLarge": "File too large. Please select a PDF file smaller than 50MB"
+    "fileTooLarge": "File too large. Please select a PDF file smaller than 50MB",
+    "internalInstructionSummary": "Advanced: AI-only generation policy (not shown as lesson text)",
+    "internalInstructionHint": "This text is merged into the outline system prompt only, not the main requirement. Keep meta checklists (e.g. PDF contract, deliverables) here so they are less likely to become slide or interactive titles. You can also set server env INTERNAL_GENERATION_INSTRUCTION.",
+    "internalInstructionPlaceholder": "e.g. PDF section scope, no fabrication rules, verification table…"
   },
   "generation": {
     "analyzingPdf": "Analyzing PDF Document",

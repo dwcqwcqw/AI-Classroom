@@ -57,11 +57,14 @@ const log = createLogger('Home');
 
 const WEB_SEARCH_STORAGE_KEY = 'webSearchEnabled';
 const LANGUAGE_STORAGE_KEY = 'generationLanguage';
+const INTERNAL_INSTRUCTION_STORAGE_KEY = 'generationInternalInstruction';
 const RECENT_OPEN_STORAGE_KEY = 'recentClassroomsOpen';
 
 interface FormState {
   pdfFile: File | null;
   requirement: string;
+  /** Merged into outline system prompt only; not treated as course body text */
+  internalInstruction: string;
   language: 'zh-CN' | 'en-US';
   webSearch: boolean;
   sceneCounts: SceneCountConfig;
@@ -70,6 +73,7 @@ interface FormState {
 const initialFormState: FormState = {
   pdfFile: null,
   requirement: '',
+  internalInstruction: '',
   language: 'zh-CN',
   webSearch: false,
   sceneCounts: {},
@@ -153,6 +157,10 @@ function HomePage() {
       const savedLanguage = localStorage.getItem(LANGUAGE_STORAGE_KEY);
       const updates: Partial<FormState> = {};
       if (savedWebSearch === 'true') updates.webSearch = true;
+      const savedInternal = localStorage.getItem(INTERNAL_INSTRUCTION_STORAGE_KEY);
+      if (savedInternal != null && savedInternal !== '') {
+        updates.internalInstruction = savedInternal;
+      }
       if (savedLanguage === 'zh-CN' || savedLanguage === 'en-US') {
         updates.language = savedLanguage;
       } else {
@@ -282,6 +290,9 @@ function HomePage() {
     try {
       if (field === 'webSearch') localStorage.setItem(WEB_SEARCH_STORAGE_KEY, String(value));
       if (field === 'language') localStorage.setItem(LANGUAGE_STORAGE_KEY, String(value));
+      if (field === 'internalInstruction') {
+        localStorage.setItem(INTERNAL_INSTRUCTION_STORAGE_KEY, String(value));
+      }
       if (field === 'requirement') updateRequirementCache(value as string);
     } catch {
       /* ignore */
@@ -347,6 +358,9 @@ function HomePage() {
         userBio: userProfile.bio || undefined,
         webSearch: form.webSearch || undefined,
         sceneCounts: hasCustomCounts ? form.sceneCounts : undefined,
+        ...(form.internalInstruction.trim()
+          ? { internalInstruction: form.internalInstruction.trim() }
+          : {}),
       };
 
       let pdfStorageKey: string | undefined;
@@ -634,6 +648,23 @@ function HomePage() {
               onKeyDown={handleKeyDown}
               rows={4}
             />
+
+            <details className="px-4 pb-1 border-t border-border/40 border-dashed group">
+              <summary className="pt-2 pb-1 text-[11px] text-muted-foreground/80 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden flex items-center gap-1">
+                <ChevronDown className="size-3 transition-transform group-open:rotate-180" />
+                {t('upload.internalInstructionSummary')}
+              </summary>
+              <p className="text-[10px] text-muted-foreground/65 leading-relaxed pb-1">
+                {t('upload.internalInstructionHint')}
+              </p>
+              <UITextarea
+                value={form.internalInstruction}
+                onChange={(e) => updateForm('internalInstruction', e.target.value)}
+                placeholder={t('upload.internalInstructionPlaceholder')}
+                className="min-h-[72px] max-h-[200px] text-[12px] resize-y bg-muted/25 border-border/50 mb-2"
+                rows={3}
+              />
+            </details>
 
             {/* Toolbar row */}
             <div className="px-3 pb-3 flex items-end gap-2">
